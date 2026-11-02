@@ -9,7 +9,7 @@
   "vsync": true,
   "defScreenW": 1280,
   "defScreenH": 720,
-  "windowTitle": "BLACK SOULS",
+  "windowTitle": "BLACK SOULS II",
   "enableBlitting": true,
   "maxTextureSize": 4096,
   "subImageFix": false,

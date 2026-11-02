@@ -1,10 +1,29 @@
 # Meson cross file for Nintendo Switch homebrew (devkitA64 / libnx / devkitPro)
 #
-# Usage:
-#   meson setup build-switch --cross-file=switch-cross.txt --wipe
+# Usage (run through switch-env.sh so TMP/DEVKITPRO are in Windows form):
+#   bash switch-env.sh bash -c 'meson setup build-switch --cross-file=switch-cross.txt --wipe \
+#         -Dgfx_backend=gles -Ddefault_system=enabled \
+#         -Dworkdir_current=true -Duse_miniffi=false'
 #
-# Requires: DEVKITPRO=C:/devkitPro with devkitA64, libnx, switch-pkg-config
-#           and portlibs under C:/devkitPro/portlibs/switch (SDL2, mesa/EGL, ...)
+# Requires: DEVKITPRO=C:/devkitPro with devkitA64, libnx, switch-pkg-config and
+#           portlibs under C:/devkitPro/portlibs/switch (SDL2, mesa/EGL, ...).
+#
+# NOTE: meson's machine-file parser does not accept multi-line arrays; every
+# array below is deliberately written on a single line. Do not reflow them.
+#
+# NOTE (pkg-config on this host, verified):
+#   * msys2 pkgconf splits PKG_CONFIG_PATH on ':' only. Meson joins multiple
+#     pkg_config_path entries with ';' on Windows, which the binary cannot
+#     parse, so the list below MUST stay a single directory. Everything
+#     (SDL2, mesa/EGL, OpenAL, PhysFS, vorbis, ...) has to land in
+#     portlibs/switch/lib/pkgconfig, which is the case for devkitPro portlibs.
+#   * the paths must be POSIX form (/c/devkitPro/...). Drive-letter forward
+#     slash form ('C:/devkitPro/...') is not resolved by this pkgconf build.
+#   * devkitPro .pc files carry prefix=/opt/devkitpro/..., which native
+#     aarch64-none-elf-gcc cannot open (verified: "zlib.h: No such file").
+#     Either rewrite them at install time (sed s#/opt/devkitpro#C:/devkitPro#)
+#     or rely on the explicit -I/-L in [built-in options] below, which cover
+#     exactly those two directories.
 
 [binaries]
 c        = 'C:/devkitPro/devkitA64/bin/aarch64-none-elf-gcc.exe'
@@ -16,9 +35,9 @@ nm       = 'C:/devkitPro/devkitA64/bin/aarch64-none-elf-nm.exe'
 objcopy  = 'C:/devkitPro/devkitA64/bin/aarch64-none-elf-objcopy.exe'
 objdump  = 'C:/devkitPro/devkitA64/bin/aarch64-none-elf-objdump.exe'
 ranlib   = 'C:/devkitPro/devkitA64/bin/aarch64-none-elf-ranlib.exe'
-# NOTE: switch-pkg-config ships a bash wrapper (aarch64-none-elf-pkg-config).
-# Windows cannot exec a shebang script through CreateProcess, so point meson at
-# the native pkg-config and constrain the search path via pkg_config_path below.
+# switch-pkg-config ships a bash wrapper (aarch64-none-elf-pkg-config); Windows
+# cannot exec a shebang script through CreateProcess, so use the native
+# pkg-config and constrain the search path with pkg_config_path below.
 pkg-config = 'C:/devkitPro/msys2/usr/bin/pkg-config.exe'
 
 [properties]
@@ -33,61 +52,11 @@ cpu        = 'cortex-a57'
 endian     = 'little'
 
 [built-in options]
-# ARCH from $(DEVKITPRO)/devkitA64/base_rules + libnx definition
-c_args = [
-  '-D__SWITCH__',
-  '-march=armv8-a+crc+crypto',
-  '-mtune=cortex-a57',
-  '-mtp=soft',
-  '-fPIE',
-  '-ffunction-sections',
-  '-fdata-sections',
-  '-I', 'C:/devkitPro/devkitA64/aarch64-none-elf/include',
-  '-I', 'C:/devkitPro/portlibs/switch/include',
-  '-I', 'C:/devkitPro/libnx/include',
-]
-cpp_args = [
-  '-D__SWITCH__',
-  '-march=armv8-a+crc+crypto',
-  '-mtune=cortex-a57',
-  '-mtp=soft',
-  '-fPIE',
-  '-ffunction-sections',
-  '-fdata-sections',
-  '-DHORIZON',
-  '-I', 'C:/devkitPro/devkitA64/aarch64-none-elf/include',
-  '-I', 'C:/devkitPro/portlibs/switch/include',
-  '-I', 'C:/devkitPro/libnx/include',
-]
-# switch.specs supplies -T switch.ld -pie --no-dynamic-linker --gc-sections ...
-c_link_args = [
-  '-specs=C:/devkitPro/libnx/switch.specs',
-  '-march=armv8-a+crc+crypto',
-  '-mtune=cortex-a57',
-  '-mtp=soft',
-  '-Wl,--gc-sections',
-  '-L', 'C:/devkitPro/portlibs/switch/lib',
-  '-L', 'C:/devkitPro/libnx/lib',
-  '-lnx',
-]
-cpp_link_args = [
-  '-specs=C:/devkitPro/libnx/switch.specs',
-  '-march=armv8-a+crc+crypto',
-  '-mtune=cortex-a57',
-  '-mtp=soft',
-  '-Wl,--gc-sections',
-  '-L', 'C:/devkitPro/portlibs/switch/lib',
-  '-L', 'C:/devkitPro/libnx/lib',
-  '-lnx',
-]
-# Never let host (Windows/msys2) .pc files leak into the target build.
-pkg_config_path = [
-  'C:/devkitPro/portlibs/switch/lib/pkgconfig',
-  'C:/devkitPro/libnx/lib/pkgconfig',
-]
-
-[options]
-# mkxp-z: force GLES (Switch has no desktop GL profile, only EGL/GLES2-3 via mesa+nv)
-gfx_backend = 'gles'
-# Everything must come from portlibs, never from host python/pip/system
-default_system = 'enabled'
+c_args = ['-D__SWITCH__', '-march=armv8-a+crc+crypto', '-mtune=cortex-a57', '-mtp=soft', '-fPIE', '-ffunction-sections', '-fdata-sections', '-IC:/devkitPro/devkitA64/aarch64-none-elf/include', '-IC:/devkitPro/portlibs/switch/include', '-IC:/devkitPro/libnx/include']
+cpp_args = ['-D__SWITCH__', '-march=armv8-a+crc+crypto', '-mtune=cortex-a57', '-mtp=soft', '-fPIE', '-ffunction-sections', '-fdata-sections', '-IC:/devkitPro/devkitA64/aarch64-none-elf/include', '-IC:/devkitPro/portlibs/switch/include', '-IC:/devkitPro/libnx/include']
+# devkitPro passes ARCH (-fPIE) to the link step too; without it ld links as a
+# non-PIE executable and switch.ld fails with "read-only segment has dynamic
+# relocations".
+c_link_args = ['-fPIE', '-specs=C:/devkitPro/libnx/switch.specs', '-march=armv8-a+crc+crypto', '-mtune=cortex-a57', '-mtp=soft', '-Wl,--gc-sections', '-LC:/devkitPro/portlibs/switch/lib', '-LC:/devkitPro/libnx/lib', '-lnx']
+cpp_link_args = ['-fPIE', '-specs=C:/devkitPro/libnx/switch.specs', '-march=armv8-a+crc+crypto', '-mtune=cortex-a57', '-mtp=soft', '-Wl,--gc-sections', '-LC:/devkitPro/portlibs/switch/lib', '-LC:/devkitPro/libnx/lib', '-lnx']
+pkg_config_path = ['/c/devkitPro/portlibs/switch/lib/pkgconfig']
