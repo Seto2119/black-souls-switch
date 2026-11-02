@@ -17,6 +17,9 @@ pc-backup/
 # Reference clone (randygil/pokemon-anil-switch)
 ref-anil/
 
+# SD card package (nro + game data, not for git)
+sd/
+
 # Logs
 ninja-log.txt
 *.log
