@@ -19,6 +19,12 @@
 #     portlibs/switch/lib/pkgconfig, which is the case for devkitPro portlibs.
 #   * the paths must be POSIX form (/c/devkitPro/...). Drive-letter forward
 #     slash form ('C:/devkitPro/...') is not resolved by this pkgconf build.
+#   * VERIFIED ALTERNATIVE (what we ended up using): the pkgconf shipped in
+#     C:/devkitPro/msys2 only resolves its own root, so PKG_CONFIG_PATH is
+#     unusable from a Windows shell. Instead every .pc (devkitPro portlibs plus
+#     the locally built ruby-3.1/pixman/uchardet/SDL2_sound/iconv) has been
+#     copied into its default search dir C:/devkitPro/msys2/usr/lib/pkgconfig,
+#     so pkg_config_path is left unset here and the built-in path is used.
 #   * devkitPro .pc files carry prefix=/opt/devkitpro/..., which native
 #     aarch64-none-elf-gcc cannot open (verified: "zlib.h: No such file").
 #     Either rewrite them at install time (sed s#/opt/devkitpro#C:/devkitPro#)
@@ -43,7 +49,6 @@ pkg-config = 'C:/devkitPro/msys2/usr/bin/pkg-config.exe'
 [properties]
 # No Switch emulator is wired up, so meson must not try to run target binaries.
 needs_exe_wrapper = true
-sys_root = 'C:/devkitPro/devkitA64/aarch64-none-elf'
 
 [host_machine]
 system     = 'switch'
@@ -52,11 +57,12 @@ cpu        = 'cortex-a57'
 endian     = 'little'
 
 [built-in options]
-c_args = ['-D__SWITCH__', '-march=armv8-a+crc+crypto', '-mtune=cortex-a57', '-mtp=soft', '-fPIE', '-ffunction-sections', '-fdata-sections', '-IC:/devkitPro/devkitA64/aarch64-none-elf/include', '-IC:/devkitPro/portlibs/switch/include', '-IC:/devkitPro/libnx/include']
-cpp_args = ['-D__SWITCH__', '-march=armv8-a+crc+crypto', '-mtune=cortex-a57', '-mtp=soft', '-fPIE', '-ffunction-sections', '-fdata-sections', '-IC:/devkitPro/devkitA64/aarch64-none-elf/include', '-IC:/devkitPro/portlibs/switch/include', '-IC:/devkitPro/libnx/include']
+c_args = ['-D__SWITCH__', '-march=armv8-a+crc+crypto', '-mtune=cortex-a57', '-mtp=soft', '-fPIE', '-ffunction-sections', '-fdata-sections', '-IC:/devkitPro/devkitA64/aarch64-none-elf/include', '-IC:/devkitPro/portlibs/switch/include', '-IC:/devkitPro/libnx/include', '-IC:/Users/user/black-souls-switch/portlibs/include', '-IC:/Users/user/black-souls-switch/portlibs/include/SDL2', '-IC:/Users/user/black-souls-switch/portlibs/include/pixman-1', '-IC:/Users/user/black-souls-switch/portlibs/include/uchardet']
+cpp_args = ['-D__SWITCH__', '-march=armv8-a+crc+crypto', '-mtune=cortex-a57', '-mtp=soft', '-fPIE', '-ffunction-sections', '-fdata-sections', '-IC:/devkitPro/devkitA64/aarch64-none-elf/include', '-IC:/devkitPro/portlibs/switch/include', '-IC:/devkitPro/libnx/include', '-IC:/Users/user/black-souls-switch/portlibs/include', '-IC:/Users/user/black-souls-switch/portlibs/include/SDL2', '-IC:/Users/user/black-souls-switch/portlibs/include/pixman-1', '-IC:/Users/user/black-souls-switch/portlibs/include/uchardet']
 # devkitPro passes ARCH (-fPIE) to the link step too; without it ld links as a
 # non-PIE executable and switch.ld fails with "read-only segment has dynamic
 # relocations".
-c_link_args = ['-fPIE', '-specs=C:/devkitPro/libnx/switch.specs', '-march=armv8-a+crc+crypto', '-mtune=cortex-a57', '-mtp=soft', '-Wl,--gc-sections', '-LC:/devkitPro/portlibs/switch/lib', '-LC:/devkitPro/libnx/lib', '-lnx']
-cpp_link_args = ['-fPIE', '-specs=C:/devkitPro/libnx/switch.specs', '-march=armv8-a+crc+crypto', '-mtune=cortex-a57', '-mtp=soft', '-Wl,--gc-sections', '-LC:/devkitPro/portlibs/switch/lib', '-LC:/devkitPro/libnx/lib', '-lnx']
-pkg_config_path = ['/c/devkitPro/portlibs/switch/lib/pkgconfig']
+c_link_args = ['-fPIE', '-specs=C:/devkitPro/libnx/switch.specs', '-march=armv8-a+crc+crypto', '-mtune=cortex-a57', '-mtp=soft', '-Wl,--gc-sections', '-LC:/devkitPro/portlibs/switch/lib', '-LC:/devkitPro/libnx/lib', '-LC:/Users/user/black-souls-switch/portlibs/lib', '-lnx']
+cpp_link_args = ['-fPIE', '-specs=C:/devkitPro/libnx/switch.specs', '-march=armv8-a+crc+crypto', '-mtune=cortex-a57', '-mtp=soft', '-Wl,--gc-sections', '-LC:/devkitPro/portlibs/switch/lib', '-LC:/devkitPro/libnx/lib', '-LC:/Users/user/black-souls-switch/portlibs/lib', '-lnx']
+# pkg_config_path intentionally unset: pkgconf's built-in /usr/lib/pkgconfig is
+# the only path it can resolve on this host (see note above).

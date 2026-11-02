@@ -1,0 +1,623 @@
+diff --git a/src/audio/alstream.cpp b/src/audio/alstream.cpp
+index a37ea71..70d94a8 100644
+--- a/src/audio/alstream.cpp
++++ b/src/audio/alstream.cpp
+@@ -35,6 +35,22 @@
+ #include <SDL_thread.h>
+ #include <SDL_timer.h>
+ 
++#ifdef __SWITCH__
++#include <switch.h>
++
++/* The music stream asks for its own preferred core (2). It is not a luxury:
++ * this thread only has to refill buffers on time, and if it shares a core with
++ * whoever is decoding a PNG it arrives late. Before the OV_HOLE fix that
++ * lateness cost the whole soundtrack; now it would only cost a click, but no
++ * click is better than one. svcSetThreadCoreMask() takes
++ * (preferred_core, affinity_mask) and the mask is a u32 bitfield. */
++static void nxBindMusicThread() {
++    Result rc = svcSetThreadCoreMask(threadGetCurHandle(), 2, 1u << 2);
++    if (R_FAILED(rc))
++        svcSetThreadCoreMask(threadGetCurHandle(), -1, 0x7u); /* any core */
++}
++#endif
++
+ ALStream::ALStream(LoopMode loopMode,
+ 		           const std::string &threadId)
+ 	: looped(loopMode == Looped),
+@@ -360,6 +376,9 @@ void ALStream::checkStopped()
+ /* thread func */
+ void ALStream::streamData()
+ {
++#ifdef __SWITCH__
++	nxBindMusicThread();
++#endif
+ 	/* Fill up queue */
+ 	bool firstBuffer = true;
+ 	ALDataSource::Status status;
+diff --git a/src/audio/vorbissource.cpp b/src/audio/vorbissource.cpp
+index 0537976..f1cc5b3 100644
+--- a/src/audio/vorbissource.cpp
++++ b/src/audio/vorbissource.cpp
+@@ -186,6 +186,9 @@ struct VorbisSource : ALDataSource
+ 
+ 		bool readAgain = false;
+ 
++		/* Holes tolerated before giving up. See the res < 0 branch. */
++		int holes = 0;
++
+ 		if (loop.valid)
+ 		{
+ 			int tilLoopEnd = loop.end * info.frameSize;
+@@ -200,6 +203,24 @@ struct VorbisSource : ALDataSource
+ 
+ 			if (res < 0)
+ 			{
++				/* OV_HOLE is not a corrupt file: it is a gap in the stream
++				 * (a page that arrived late or damaged) and libvorbis documents
++				 * it as recoverable — read again and carry on.
++				 *
++				 * Treating it as an error costs the whole soundtrack, not one
++				 * click: the Error propagates to ALStream::streamData, which
++				 * returns and kills the streaming thread for good; then
++				 * checkStopped sees the source stopped and reports Stopped.
++				 * Background music does not come back until something asks for
++				 * a different track. Sound effects keep working because they
++				 * are not streamed. On a real SD card, sharing one core, holes
++				 * do happen.
++				 *
++				 * The retry is bounded so a genuinely broken file cannot spin
++				 * the thread forever. */
++				if (res == OV_HOLE && ++holes <= 8)
++					continue;
++
+ 				/* Read error */
+ 				retStatus = ALDataSource::Error;
+ 
+diff --git a/src/eventthread.cpp b/src/eventthread.cpp
+index 82d91ce..e6c7829 100644
+--- a/src/eventthread.cpp
++++ b/src/eventthread.cpp
+@@ -488,21 +488,42 @@ void EventThread::process(RGSSThreadData &rtData)
+                         break;
+                         
+                     case REQUEST_WINRESIZE :
++#ifdef __SWITCH__
++                        /* On Horizon the window IS the screen: 1280x720 handheld,
++                         * 1920x1080 docked, and it can neither be moved nor
++                         * resized. Worse, trying kills the process:
++                         * SDL_SetWindowSize -> switch_create_window_surface ->
++                         * nwindowSetDimensions returns AlreadyInitialized and
++                         * Mesa's winsys answers errors with fatalThrow (the
++                         * 2345-0007 error screen and nothing else).
++                         *
++                         * Games call Graphics.resize_screen right after boot, so
++                         * this is the normal path, not an edge case. The internal
++                         * resolution still changes (Graphics::resizeScreen does
++                         * that before asking), and mkxp-z scales it into the
++                         * fixed window, so ignoring the request is correct. The
++                         * handshake must be kept: rqWindowAdjust is waited on. */
++#else
+                         SDL_SetWindowSize(win, event.window.data1, event.window.data2);
++#endif
+                         rtData.rqWindowAdjust.clear();
+                         break;
+                         
+                     case REQUEST_WINREPOSITION :
++#ifndef __SWITCH__
+                         SDL_SetWindowPosition(win, event.window.data1, event.window.data2);
++#endif
+                         rtData.rqWindowAdjust.clear();
+                         break;
+                         
+                     case REQUEST_WINCENTER :
++#ifndef __SWITCH__
+                         rc = SDL_GetDesktopDisplayMode(SDL_GetWindowDisplayIndex(win), &dm);
+                         if (!rc)
+                             SDL_SetWindowPosition(win,
+                                                   (dm.w / 2) - (winW / 2),
+                                                   (dm.h / 2) - (winH / 2));
++#endif
+                         rtData.rqWindowAdjust.clear();
+                         break;
+                         
+@@ -691,9 +712,18 @@ void EventThread::resetInputStates()
+ 
+ void EventThread::setFullscreen(SDL_Window *win, bool mode)
+ {
++#ifdef __SWITCH__
++    /* Always fullscreen, no alternative; SDL_SetWindowFullscreen ends up in the
++     * same switch_create_window_surface()/nwindowSetDimensions path that
++     * fatalThrows. See REQUEST_WINRESIZE. */
++    (void)win;
++    (void)mode;
++    fullscreen = true;
++#else
+     SDL_SetWindowFullscreen
+     (win, mode ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+     fullscreen = mode;
++#endif
+ }
+ 
+ void EventThread::updateCursorState(bool inWindow,
+diff --git a/src/filesystem/ghc/filesystem.hpp b/src/filesystem/ghc/filesystem.hpp
+index 12bd8cc..87466f5 100644
+--- a/src/filesystem/ghc/filesystem.hpp
++++ b/src/filesystem/ghc/filesystem.hpp
+@@ -72,6 +72,10 @@
+ #elif defined(__EMSCRIPTEN__)
+ #define GHC_OS_WEB
+ #include <wasi/api.h>
++#elif defined(__SWITCH__)
++/* devkitA64's newlib provides stat/opendir/readdir/realpath through libsysbase,
++   which is everything ghc::filesystem needs on its POSIX path. */
++#define GHC_OS_LINUX
+ #else
+ #error "Operating system currently not supported!"
+ #endif
+diff --git a/src/input/keybindings.cpp b/src/input/keybindings.cpp
+index e62076a..633f7c0 100644
+--- a/src/input/keybindings.cpp
++++ b/src/input/keybindings.cpp
+@@ -104,10 +104,24 @@ static elementsN(defaultKbBindings2);
+ 
+ static const CtrlBindingData defaultCtrlBindings[] =
+ {
++#ifdef __SWITCH__
++	/* SDL names buttons by POSITION, Xbox-style: A at the bottom, B on the
++	 * right, X on the left, Y on top. A Nintendo pad has the letters the other
++	 * way round, so the console's A button — the right one, "confirm" in every
++	 * Switch game — reaches SDL as SDL_CONTROLLER_BUTTON_B (measured: pressing A
++	 * reports button 1). With the stock map, confirm would be the bottom button
++	 * and cancel the right one, i.e. backwards. Swap both pairs so A confirms
++	 * and B cancels. */
++	{ SDL_CONTROLLER_BUTTON_Y, Input::A  },   /* Switch X */
++	{ SDL_CONTROLLER_BUTTON_A, Input::B  },   /* Switch B: cancel */
++	{ SDL_CONTROLLER_BUTTON_B, Input::C  },   /* Switch A: confirm */
++	{ SDL_CONTROLLER_BUTTON_X, Input::X  },   /* Switch Y */
++#else
+ 	{ SDL_CONTROLLER_BUTTON_X, Input::A  },
+ 	{ SDL_CONTROLLER_BUTTON_B, Input::B  },
+ 	{ SDL_CONTROLLER_BUTTON_A, Input::C },
+ 	{ SDL_CONTROLLER_BUTTON_Y, Input::X  },
++#endif
+ 	{ SDL_CONTROLLER_BUTTON_LEFTSTICK, Input::Y  },
+ 	{ SDL_CONTROLLER_BUTTON_RIGHTSTICK, Input::Z },
+ 	{ SDL_CONTROLLER_BUTTON_LEFTSHOULDER, Input::L  },
+diff --git a/src/main.cpp b/src/main.cpp
+index af81d66..92f49d1 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -74,7 +74,7 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+ #include "TouchBar.h"
+ #endif
+ 
+-#if !defined(__ANDROID__) && !defined(__APPLE__) && !defined(_WIN32)
++#if !defined(__ANDROID__) && !defined(__APPLE__) && !defined(_WIN32) && !defined(__SWITCH__)
+ #  define MKXPZ_CHECK_FOR_WAYLAND_SUPPORT
+ #endif
+ 
+@@ -200,7 +200,18 @@ static void rgssThreadError(RGSSThreadData *rtData, const std::string &msg) {
+ 
+ static void showInitError(const std::string &msg) {
+   Debug() << msg;
++#ifdef __SWITCH__
++  /* SDL_ShowSimpleMessageBox needs a working window server; on Horizon it
++     either no-ops or crashes before the SDL video init has completed, which is
++     exactly the situation this function reports on. Write to the SD card so
++     the error survives a reboot. */
++  if (FILE *f = fopen("sdmc:/mkxp-z-error.log", "a")) {
++    fprintf(f, "%s\n", msg.c_str());
++    fclose(f);
++  }
++#else
+   SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "mkxp-z", msg.c_str(), 0);
++#endif
+ }
+ 
+ static void setupWindowIcon(const Config &conf, SDL_Window *win) {
+@@ -227,11 +238,26 @@ static SDL_Window *initVideo(const Config &conf) {
+   if (conf.fullscreen)
+     winFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+ 
++#ifdef __SWITCH__
++  /* Horizon's EGL only offers GLES2, and there is exactly one fullscreen
++     surface: no high-DPI scaling, no resizable windows, no window decorations. */
++  winFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_INPUT_FOCUS;
++#endif
++
+   if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+     return nullptr;
+   }
+ 
++#ifdef __SWITCH__
++  SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
++  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
++  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
++  SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
++  SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
++  SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
++#else
+   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GetHintBoolean(SDL_HINT_OPENGL_ES_DRIVER, SDL_FALSE) ? SDL_GL_CONTEXT_PROFILE_ES : SDL_GL_CONTEXT_PROFILE_CORE | SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
++#endif
+ 
+   SDL_Window *window = SDL_CreateWindow(conf.windowTitle.c_str(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, conf.defScreenW, conf.defScreenH, winFlags);
+   if (window == nullptr) {
+@@ -240,7 +266,56 @@ static SDL_Window *initVideo(const Config &conf) {
+   return window;
+ }
+ 
++#ifdef __SWITCH__
++#include <switch.h>
++#include <unistd.h>
++
++extern "C" void nxBootTrace(const char *msg);
++extern "C" void nxExceptionHandlerInstall(void);
++
++/* Horizon start-up. WORKDIR_CURRENT makes mkxp-z look for mkxp.json, Data/ and
++ * Graphics/ in the current directory, but hbmenu does not define which one that
++ * is, so pin it to the directory holding the .nro itself, taken from argv[0]
++ * (e.g. "sdmc:/switch/black-souls/black-souls.nro"). */
++static void nxSetupWorkdir(int argc, char *argv[]) {
++  if (argc > 0 && argv[0] && argv[0][0]) {
++    char buf[512];
++    strncpy(buf, argv[0], sizeof(buf) - 1);
++    buf[sizeof(buf) - 1] = 0;
++    char *slash = strrchr(buf, '/');
++    if (slash) {
++      *slash = 0;
++      if (chdir(buf) == 0) {
++        Debug() << "[nx] working directory:" << buf;
++        nxBootTrace(buf);
++        return;
++      }
++      Debug() << "[nx] chdir failed on" << buf;
++    }
++  }
++  /* Last resort: the agreed SD card location. */
++  if (chdir("sdmc:/switch/black-souls") == 0)
++    Debug() << "[nx] working directory: sdmc:/switch/black-souls (fallback)";
++  else
++    Debug() << "[nx] could not set the working directory";
++}
++#endif
++
+ int main(int argc, char *argv[]) {
++#ifdef __SWITCH__
++    nxBootTrace("main() reached");
++    {
++        char msg[512];
++        snprintf(msg, sizeof(msg), "argc=%d argv[0]=%s", argc,
++                 (argc > 0 && argv[0]) ? argv[0] : "(null)");
++        nxBootTrace(msg);
++    }
++    nxSetupWorkdir(argc, argv);
++    {
++        char cwd[512] = {0};
++        if (getcwd(cwd, sizeof(cwd))) nxBootTrace(cwd);
++    }
++#endif
+     SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
+     SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
+ 
+diff --git a/src/meson.build b/src/meson.build
+index 3ee772d..9b054c7 100755
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -97,9 +97,18 @@ endif
+ meson.add_dist_script(python, files('../distscript.py'), get_option('dist_subprojects'), distscript_vcs_command)
+ global_dependencies += declare_dependency(sources: git_hash_file)
+ 
+-gl = dependency('gl', allow_fallback: false, required: get_option('gl_system').disable_auto_if(default_system_disabled).enable_auto_if(default_system_enabled))
+-if not gl.found()
+-    gl = subproject('mesa', default_options: meson_base_options).get_variable('gl')
++# Nintendo Switch port: there is no desktop libGL on Horizon OS. devkitPro's
++# mesa port exposes only EGL + GLESv2 (dkp-pacman switch-mesa), and the vendored
++# mesa subproject cannot be cross-built here (it is a full desktop Mesa tree).
++if host_system == 'switch'
++    gl = dependency('egl', allow_fallback: false)
++    glesv2 = dependency('glesv2', allow_fallback: false)
++    gl = declare_dependency(dependencies: [gl, glesv2])
++else
++    gl = dependency('gl', allow_fallback: false, required: get_option('gl_system').disable_auto_if(default_system_disabled).enable_auto_if(default_system_enabled))
++    if not gl.found()
++        gl = subproject('mesa', default_options: meson_base_options).get_variable('gl')
++    endif
+ endif
+ 
+ libiconv = dependency('iconv', allow_fallback: false, required: get_option('iconv_system').disable_auto_if(default_system_disabled).enable_auto_if(default_system_enabled))
+@@ -824,7 +833,13 @@ if not sdl2_ttf.found()
+ endif
+ global_dependencies += sdl2_ttf
+ 
+-if sdl2_ttf.type_name() == 'internal'
++if host_system == 'switch'
++    # SDL_ttf >= 2.0.18 declares TTF_Font as a typedef of struct _TTF_Font, so
++    # font.h's "struct MKXPZ_TTF_FONT;" is illegal with the typedef name (the
++    # compile test above still passes, it only checks TTF_OpenFont). The struct
++    # tag itself is stable, so use it directly.
++    global_args += '-DMKXPZ_TTF_FONT=_TTF_Font'
++elif sdl2_ttf.type_name() == 'internal'
+     global_args += '-DMKXPZ_TTF_FONT=_TTF_Font'
+ elif meson.get_compiler('c').compiles('''
+     #include <SDL_ttf.h>
+@@ -1070,6 +1085,28 @@ if not sdl2_image.found()
+ endif
+ global_dependencies += sdl2_image
+ 
++if host_system == 'switch'
++    # devkitPro's SDL2_image.pc lists its codecs in Requires.private, which
++    # meson does not propagate for a static dependency, so IMG_jpg.c ends up
++    # with undefined jpeg_* references at link time. Pull the codec archives in
++    # explicitly; they land inside the linker's --start-group, so order is not
++    # significant.
++    switch_cc = meson.get_compiler('c')
++    global_dependencies += [
++        switch_cc.find_library('jpeg', required: false),
++        switch_cc.find_library('png16', required: false),
++        switch_cc.find_library('webp', required: false),
++    ]
++endif
++
++# Switch: FluidSynth is not packaged for devkitPro and its CMake build pulls in
++# glib/threads/sound drivers that do not exist on Horizon. Skipping the
++# dependency keeps SHARED_FLUID undefined, so audio/fluid-fun.cpp falls back to
++# SDL_LoadObject() and simply reports "MIDI playback is disabled" at runtime.
++if host_system == 'switch'
++    fluidsynth = dependency('', required: false)
++    global_args += '-DMKXPZ_FLUIDSYNTH_SONAME="libfluidsynth-2.so"'
++else
+ fluidsynth = dependency('fluidsynth', allow_fallback: false, required: get_option('fluidsynth_system').disable_auto_if(default_system_disabled).enable_auto_if(default_system_enabled))
+ if not fluidsynth.found()
+     gcem_options = meson_base_options
+@@ -1128,9 +1165,13 @@ if not fluidsynth.found()
+     fluidsynth = cmake.subproject('fluidsynth', options: fluidsynth_options).dependency('libfluidsynth')
+     meson.override_dependency('fluidsynth', fluidsynth, static: true)
+ endif
++endif
++
+ global_dependencies += fluidsynth
+ 
+-global_args += '-DMKXPZ_FLUIDSYNTH_SONAME="' + run_command(sonametool, 'fluidsynth', check: true).stdout().strip() + '"'
++if host_system != 'switch'
++    global_args += '-DMKXPZ_FLUIDSYNTH_SONAME="' + run_command(sonametool, 'fluidsynth', check: true).stdout().strip() + '"'
++endif
+ 
+ ruby = dependency('ruby-' + get_option('mri_version'), allow_fallback: false, required: get_option('ruby_system').disable_auto_if(default_system_disabled).enable_auto_if(default_system_enabled))
+ if not ruby.found()
+@@ -1198,11 +1239,21 @@ if not ruby.found()
+ endif
+ global_dependencies += ruby
+ 
++# Switch: libstdc++/libgcc are static in devkitA64 and libnxcompat (built
++# alongside Ruby) provides the POSIX stubs newlib lacks (popen, sysconf,
++# waitpid, getuid, ...). --wrap=fcntl/realpath come from src/nxcompat.c.
++if host_system == 'switch'
++    global_link_args += ['-static-libstdc++', '-static-libgcc', '-lnxcompat', '-lnx']
++    global_link_args += ['-Wl,--wrap=fcntl', '-Wl,--wrap=realpath']
++    global_args += '-DAL_LIBTYPE_STATIC'
++    global_args += '-DMKXPZ_SWITCH'
++else
+ if host_system in ['windows', 'cygwin']
+     global_link_args += ['-static-libgcc', '-static-libstdc++', '-Wl,-Bstatic', '-lpthread', '-Wl,-Bdynamic', '-Wl,--stack=0x200000']
+ else
+     global_link_args += ['-static-libstdc++']
+ endif
++endif
+ 
+ global_args += '-DMKXPZ_ALCDEVICE=ALCdevice'
+ 
+@@ -1219,7 +1270,9 @@ global_include_dirs += include_directories('.',
+     'util', 'util/sigslot', 'util/sigslot/adapter'
+ )
+ 
+-global_cpp_args += '-DSHARED_FLUID'
++if host_system != 'switch'
++    global_cpp_args += '-DSHARED_FLUID'
++endif
+ 
+ if get_option('cjk_fallback_font') == true
+     global_cpp_args += '-DMKXPZ_CJK_FONT'
+@@ -1287,6 +1340,9 @@ main_source = files(
+     'net/net.cpp',
+ 
+     host_system == 'darwin' ? 'system/systemImplApple.mm' : 'system/systemImpl.cpp',
++
++    # Switch-only: __wrap_fcntl/__wrap_realpath plus the horizon boot helpers.
++    host_system == 'switch' ? 'nxcompat.c' : [],
+ )
+ 
+ global_sources += main_source
+diff --git a/src/net/httplib.h b/src/net/httplib.h
+index 8944945..06fe911 100644
+--- a/src/net/httplib.h
++++ b/src/net/httplib.h
+@@ -172,7 +172,8 @@ using socket_t = SOCKET;
+ #else // not _WIN32
+ 
+ #include <arpa/inet.h>
+-#if !defined(_AIX) && !defined(__MVS__)
++#if !defined(_AIX) && !defined(__MVS__) && !defined(__SWITCH__)
++/* Horizon OS does not expose getifaddrs(). */
+ #include <ifaddrs.h>
+ #endif
+ #ifdef __MVS__
+@@ -193,10 +194,17 @@ using socket_t = SOCKET;
+ #endif
+ #include <csignal>
+ #include <pthread.h>
++#ifndef __SWITCH__
++/* Horizon OS has no mmap(); httplib only uses it for file-backed response
++   bodies, which mkxp-z's HTTP binding never asks for. */
+ #include <sys/mman.h>
++#endif
+ #include <sys/select.h>
+ #include <sys/socket.h>
++#ifndef __SWITCH__
++/* No AF_UNIX / unix(7) sockets on Horizon OS. */
+ #include <sys/un.h>
++#endif
+ #include <unistd.h>
+ 
+ using socket_t = int;
+@@ -2587,6 +2595,11 @@ inline bool mmap::open(const char *path) {
+   }
+ 
+   addr_ = ::MapViewOfFile(hMapping_, FILE_MAP_READ, 0, 0, 0);
++#elif defined(__SWITCH__)
++  /* Horizon OS has no mmap(); httplib only needs it for file-backed response
++     bodies, which mkxp-z never requests. Report failure instead. */
++  (void)path;
++  return false;
+ #else
+   fd_ = ::open(path, O_RDONLY);
+   if (fd_ == -1) { return false; }
+@@ -2633,7 +2646,9 @@ inline void mmap::close() {
+   }
+ #else
+   if (addr_ != nullptr) {
++#ifndef __SWITCH__
+     munmap(addr_, size_);
++#endif
+     addr_ = nullptr;
+   }
+ 
+@@ -2963,6 +2978,8 @@ socket_t create_socket(const std::string &host, const std::string &ip, int port,
+   }
+ 
+ #ifndef _WIN32
++#ifndef __SWITCH__
++  /* No AF_UNIX sockets on Horizon OS: unix(7) is not implemented by libnx. */
+   if (hints.ai_family == AF_UNIX) {
+     const auto addrlen = host.length();
+     if (addrlen > sizeof(sockaddr_un::sun_path)) return INVALID_SOCKET;
+@@ -2987,6 +3004,7 @@ socket_t create_socket(const std::string &host, const std::string &ip, int port,
+     }
+     return sock;
+   }
++#endif // !__SWITCH__
+ #endif
+ 
+   auto service = std::to_string(port);
+@@ -3113,7 +3131,9 @@ inline bool bind_ip_address(socket_t sock, const std::string &host) {
+   return ret;
+ }
+ 
+-#if !defined _WIN32 && !defined ANDROID && !defined _AIX && !defined __MVS__
++#if !defined _WIN32 && !defined ANDROID && !defined _AIX && !defined __MVS__ && !defined __SWITCH__
++/* if2ip() only implements the optional "bind to this interface" feature of
++   httplib, which relies on getifaddrs(); Horizon does not provide it. */
+ #define USE_IF2IP
+ #endif
+ 
+diff --git a/src/system/system.h b/src/system/system.h
+index f406486..1082f99 100644
+--- a/src/system/system.h
++++ b/src/system/system.h
+@@ -14,8 +14,13 @@
+ #define MKXPZ_PLATFORM_MACOS 1
+ #define MKXPZ_PLATFORM_LINUX 2
+ #define MKXPZ_PLATFORM_BSD 3
++#define MKXPZ_PLATFORM_SWITCH 4
+ 
+-#ifdef __WIN32__
++/* Horizon OS first: devkitA64 defines none of the other platform macros, but
++   being explicit here documents that the Switch is a separate target. */
++#ifdef __SWITCH__
++#define MKXPZ_PLATFORM MKXPZ_PLATFORM_SWITCH
++#elif defined __WIN32__
+ #define MKXPZ_PLATFORM MKXPZ_PLATFORM_WINDOWS
+ #elif defined __APPLE__
+ #define MKXPZ_PLATFORM MKXPZ_PLATFORM_MACOS
+diff --git a/src/system/systemImpl.cpp b/src/system/systemImpl.cpp
+index 090ab5b..6f9f0d7 100644
+--- a/src/system/systemImpl.cpp
++++ b/src/system/systemImpl.cpp
+@@ -10,6 +10,11 @@
+ #if defined(__WIN32__)
+ #include <stdlib.h>
+ #include <windows.h>
++#elif defined(__SWITCH__)
++/* newlib ships only the "C" locale, so std::locale("") throws. Horizon
++   exposes the system language through the 'set' service instead. */
++#include <switch.h>
++#include <stdlib.h>
+ #else
+ #include <locale>
+ #endif
+@@ -25,6 +30,39 @@ std::string systemImpl::getSystemLanguage() {
+     LANGID lid = GetUserDefaultLangID();
+     LCIDToLocaleName(lid, wbuf, sizeof(wbuf), 0);
+     wcstombs(buf, wbuf, sizeof(buf));
++#elif defined(__SWITCH__)
++    {
++        u64 lcode = 0;
++        SetLanguage lang = SetLanguage_ENUS;
++        const char *tag = "en_US";
++        if (R_SUCCEEDED(setInitialize())) {
++            if (R_SUCCEEDED(setGetSystemLanguage(&lcode)) &&
++                R_SUCCEEDED(setMakeLanguage(lcode, &lang))) {
++                switch (lang) {
++                case SetLanguage_ES:     tag = "es_ES"; break;
++                case SetLanguage_ES419:  tag = "es_419"; break;
++                case SetLanguage_FR:
++                case SetLanguage_FRCA:   tag = "fr_FR"; break;
++                case SetLanguage_DE:     tag = "de_DE"; break;
++                case SetLanguage_IT:     tag = "it_IT"; break;
++                case SetLanguage_PT:
++                case SetLanguage_PTBR:   tag = "pt_BR"; break;
++                case SetLanguage_JA:     tag = "ja_JP"; break;
++                case SetLanguage_KO:     tag = "ko_KR"; break;
++                case SetLanguage_RU:     tag = "ru_RU"; break;
++                case SetLanguage_ZHCN:
++                case SetLanguage_ZHHANS: tag = "zh_CN"; break;
++                case SetLanguage_ZHTW:
++                case SetLanguage_ZHHANT: tag = "zh_TW"; break;
++                case SetLanguage_NL:     tag = "nl_NL"; break;
++                default:                 tag = "en_US"; break;
++                }
++            }
++            setExit();
++        }
++        strncpy(buf, tag, sizeof(buf) - 1);
++        return std::string(buf); /* already normalised, skip the '.' trim below */
++    }
+ #else
+     strncpy(buf, std::locale("").name().c_str(), sizeof(buf));
+ #endif
+@@ -49,6 +87,11 @@ std::string systemImpl::getUserName() {
+     // The Ruby binding gets the username from the environment loaded
+     // with Ruby instead, should fix getting it from WinAPI at some point
+     return std::string("unused");
++#elif defined(__SWITCH__)
++    /* Horizon has no USER environment variable; the real profile name would
++       need the 'account' service, which is not always available when launched
++       from hbmenu. */
++    return std::string("Player");
+ #else
+     char ret[30];
+     char *username = getenv("USER");
+diff --git a/src/util/rapidcsv.h b/src/util/rapidcsv.h
+index cad4cf8..d64aeed 100644
+--- a/src/util/rapidcsv.h
++++ b/src/util/rapidcsv.h
+@@ -16,6 +16,7 @@
+ #include <algorithm>
+ #include <cassert>
+ #include <cmath>
++#include <cstdlib>
+ #ifdef HAS_CODECVT
+ #include <codecvt>
+ #include <locale>
+@@ -232,7 +233,10 @@ namespace rapidcsv
+           }
+           else if (typeid(T) == typeid(long double))
+           {
+-            pVal = static_cast<T>(std::stold(pStr));
++            /* newlib declares only the wide-char std::stold overload, so the
++               std::string one is missing and overload resolution picks
++               stold(const wstring&). strtold() is unambiguous. */
++            pVal = static_cast<T>(strtold(pStr.c_str(), nullptr));
+             return;
+           }
+         }

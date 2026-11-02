@@ -8,6 +8,18 @@ build/
 *.npdm
 *.map
 *.d
+mkxp-z.elf
+
+# Compiled portlibs (rebuilt by scripts, NOT for git)
+portlibs/
+pc-backup/
+
+# Reference clone (randygil/pokemon-anil-switch)
+ref-anil/
+
+# Logs
+ninja-log.txt
+*.log
 
 # Game data (commercial assets — never commit)
 gamedata/
@@ -22,3 +34,4 @@ System/
 # OS noise
 .DS_Store
 Thumbs.db
+mkxp-z.elf
