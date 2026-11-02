@@ -1,50 +1,54 @@
 # Отчёт об исследовании и статусе
 
-Дата: 2026-11-02. Статус: **Этап 1 (исследование) завершён, Этап 2 (smoke-test) завершён.**
+Дата: 2026-11-03. Статус: **движок собран (`.nro`), перенос игры на Switch — не завершён (японские имена файлов).**
 
 ## 1. Исследование mkxp-z и Nintendo Switch
 
-### Выводы
+1. **mkxp-z официально НЕ поддерживает Switch.** Windows/Linux/macOS — да, Switch — нет.
+2. **Порт BLACK SOULS есть на PortMaster (Linux-хендхелды), не на Switch.** Портер `Omka1337`, репо `omka-1337/BlackSouls-PortMaster`. Доказывает: mkxp-z запускает BLACK SOULS на ARM64.
+3. **Рабочий прецедент порта mkxp-z под Switch (libnx):** `randygil/pokemon-anil-switch` — `build-deps.sh` собирает зависимости под `devkitA64` с `-D__SWITCH__`, линковка `-lnxcompat -lnx`. Ruby решён как **статический CRuby 3.1.7** (не mruby), 23/23 тестов на реальной Switch.
 
-1. **mkxp-z официально НЕ поддерживает Switch.** Поддерживаемые платформы: Windows, Linux (x86/ARM/POWER), macOS (Intel + Apple Silicon). В README upstream Switch не упомянут.
-2. **Официальный порт BLACK SOULS существует — но для PortMaster (Linux-хендхелды), а не для Switch.** Портер `Omka1337`, репозиторий `omka-1337/BlackSouls-PortMaster`. Движок — mkxp-z, собранный под ARM/Linux. Это прямое доказательство: **mkxp-z способен запускать BLACK SOULS на ARM64** — вопрос только в слое ОС.
-3. **Есть прецедент порта mkxp-z именно под Switch (libnx):** репозиторий `randygil/pokemon-anil-switch` содержит `build-deps.sh`, где mkxp-z-зависимости (libiconv, uchardet, SDL_sound, pixman) собираются под `devkitA64` с `-D__SWITCH__` и линкуются с `-lnxcompat -lnx`. Это рабочий образец сборки mkxp-z под Horizon OS.
-4. **devkitPro/libnx полностью поддерживают Switch:** `devkitA64` (gcc 16.1.0, binutils 2.46.0, newlib), `libnx 4.12.0`, `switch-cmake 1.5.2`, `switch-pkg-config`, `switch-zlib`, `switch-curl`. Графика: deko3d + OpenGL (EGL) — оба есть в examples.
+## 2. Что сделано (завершено)
 
-### Таблица совместимости с devkitPro/libnx
+| Компонент | Статус |
+|---|---|
+| Исследование | ✅ есть прецедент, Ruby-подход проверен |
+| Smoke-test `.nro` (libnx) | ✅ собран, exit 0 |
+| Кросс-сборка Ruby 3.1.7 → `libruby-static.a` | ✅ (45.7 МБ) |
+| portlibs (iconv, uchardet, SDL_sound, pixman, SDL2, nxcompat) | ✅ собраны |
+| Системные portlibs (mesa/EGL, sdl2_image/ttf, openal, physfs, vorbis…) | ✅ 16 пакетов pacman |
+| Патчи mkxp-z (24 шт) | ✅ `patches/mkxp-z-switch.diff` |
+| Сборка движка | ✅ `mkxp-z.nro` (18.3 МБ), `--no-undefined` чисто |
+| Обработчик исключений libnx + трассировка T0–T12 | ✅ `nxcompat.c` |
 
-| Компонент mkxp-z | Зависимость | В devkitPro? | Примечание |
-|---|---|---|---|
-| SDL2 (ядро) | SDL2 | ⚠️ через `switch-sdl2` | есть пакет `switch-sdl2` в dkp-pacman |
-| Графика (GL) | OpenGL/EGL | ✅ | libnx `deko3d.h` + `switch-mesa`/EGL |
-| Графика (программ.) | pixman | ❌ | собрать самому (см. pokemon-anil-switch) |
-| Аудио | SDL2_mixer / SDL_sound | ⚠️ | SDL_sound собрать самому |
-| MIDI | fluidsynth | ❌ | собрать самому или отключить |
-| Шрифты/текст | SDL_ttf / shader | ⚠️ | зависит от конфигурации |
-| Ruby (RGSS3) | MRI Ruby | ❌ | главный порог — нужна кросс-сборка Ruby под ARM64 |
-| Кодировки | libiconv, uchardet | ❌ | собрать самому |
-| ФС (microSD) | libnx `fs` | ✅ | нативно |
+Итог: движок **собирается без ошибок**, запуск на консоли **не подтверждён**.
 
-### Ключевой риск
+## 3. Главные технические открытия
 
-**MRI Ruby (интерпретатор RGSS3).** mkxp-z использует MRI, а не mruby (в upstream mruby/nul привязки удалены). Кросс-компиляция полноценного MRI под `aarch64-none-elf` — нетривиальна: нужны configure-флаги под newlib, `--disable-shared`, возможно `miniruby` для кодогенерации. Это основной блокер Этапа 3, а не SDL2/графика.
+- **libnx в этой версии не имеет API `exceptionHandler`.** Механизм — weak-символ `__libnx_exception_handler` + `__nx_exception_stack[0x4000]` + `__nx_exception_ignoredebug=1`. Без них краш молча убивал процесс (чёрный экран).
+- **Ruby под Horizon требует:** BASERUBY 3.1.x, патч `mkmf.rb try_link0`, отключение GC-компактификации, `PTHREAD_STACK_MIN=16384`, shim `pthread_getattr_np`.
+- **meson cross-файл:** `-fPIE` в c_args И c_link_args; `DEVKITPRO` в Windows-форме; `pkg_config_path` — один каталог.
 
-Проверяемое решение: собрать Ruby как статическую библиотеку тем же методом, что libiconv/pixman в `pokemon-anil-switch` (configure `--host=aarch64-none-elf`), либо использовать mruby-привязку, если версия игры совместима.
+## 4. Блокер: перенос игры на Switch
 
-## 2. Подготовка (Этап 2)
+**FTP-серверы Switch (DBI и sys-ftpd) не поддерживают не-ASCII (японские) имена** — `fopen` ломается на символах > U+00FF. MTP-режим DBI — так же. Фундаментальное ограничение.
 
-- [x] devkitPro установлен (проверено: devkitA64, libnx 4.12.0, switch-cmake).
-- [x] Минимальный `.nro` собран: `black-souls-switch.nro` (166 КБ) + `.nacp`. Команда `make` завершилась exit 0.
-- [ ] Отсутствующие portlibs для mkxp-z: SDL2, SDL_sound, fluidsynth, Ruby, pixman, libiconv, uchardet — **не собраны** (Этап 3).
+В игре 1343 файла с японскими именами (BGM/SE, спрайты) — без них RGSS не найдёт ресурсы.
 
-## 3. Следующие шаги (Этап 3)
+**Решение (проверено):** кардридер ПК + `robocopy` (юникод идеально, 3914/3914). Детали — `docs/TRANSFER.md`.
 
-1. Установить/собрать `switch-sdl2` и прочие portlibs.
-2. Кросс-сборка Ruby под ARM64 (ключевой блокер).
-3. Сборка mkxp-z с `-D__SWITCH__` по образцу `randygil/pokemon-anil-switch`.
-4. Запуск на консоли, проверка по чек-листу Этапа 4.
+На Switch уже: `.nro` + `mkxp.json` + 2571 ASCII-файл. Не хватает **1297 японских** (`tools/missing_files.txt`).
 
-## 4. Ограничения
+## 5. Следующие шаги (завтра)
 
-- Сборка `.nro` на этой машине подтверждена; **запуск на консоли ещё не выполнялся**.
-- Коммерческие ресурсы BLACK SOULS в репозиторий не входят.
+1. Дозалить 1297 японских файлов через кардридер (robocopy).
+2. Запустить на Switch, снять `mkxp-z-boot.log` (T0–T12) и `mkxp-z-error.log`.
+3. Точечные правки по логам.
+4. Финализировать README/релиз.
+
+## 6. Ограничения
+
+- Движок собран, но **не запущен** — «собирается» ≠ «работает».
+- MIDI отключён (FluidSynth не портирован).
+- OpenSSL выключен.
+- Коммерческие ресурсы в репозиторий не входят.

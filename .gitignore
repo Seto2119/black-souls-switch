@@ -38,3 +38,5 @@ System/
 .DS_Store
 Thumbs.db
 mkxp-z.elf
+.local/
+
