@@ -1,0 +1,93 @@
+# Meson cross file for Nintendo Switch homebrew (devkitA64 / libnx / devkitPro)
+#
+# Usage:
+#   meson setup build-switch --cross-file=switch-cross.txt --wipe
+#
+# Requires: DEVKITPRO=C:/devkitPro with devkitA64, libnx, switch-pkg-config
+#           and portlibs under C:/devkitPro/portlibs/switch (SDL2, mesa/EGL, ...)
+
+[binaries]
+c        = 'C:/devkitPro/devkitA64/bin/aarch64-none-elf-gcc.exe'
+cpp      = 'C:/devkitPro/devkitA64/bin/aarch64-none-elf-g++.exe'
+ar       = 'C:/devkitPro/devkitA64/bin/aarch64-none-elf-ar.exe'
+strip    = 'C:/devkitPro/devkitA64/bin/aarch64-none-elf-strip.exe'
+ld       = 'C:/devkitPro/devkitA64/bin/aarch64-none-elf-ld.exe'
+nm       = 'C:/devkitPro/devkitA64/bin/aarch64-none-elf-nm.exe'
+objcopy  = 'C:/devkitPro/devkitA64/bin/aarch64-none-elf-objcopy.exe'
+objdump  = 'C:/devkitPro/devkitA64/bin/aarch64-none-elf-objdump.exe'
+ranlib   = 'C:/devkitPro/devkitA64/bin/aarch64-none-elf-ranlib.exe'
+# NOTE: switch-pkg-config ships a bash wrapper (aarch64-none-elf-pkg-config).
+# Windows cannot exec a shebang script through CreateProcess, so point meson at
+# the native pkg-config and constrain the search path via pkg_config_path below.
+pkg-config = 'C:/devkitPro/msys2/usr/bin/pkg-config.exe'
+
+[properties]
+# No Switch emulator is wired up, so meson must not try to run target binaries.
+needs_exe_wrapper = true
+sys_root = 'C:/devkitPro/devkitA64/aarch64-none-elf'
+
+[host_machine]
+system     = 'switch'
+cpu_family = 'aarch64'
+cpu        = 'cortex-a57'
+endian     = 'little'
+
+[built-in options]
+# ARCH from $(DEVKITPRO)/devkitA64/base_rules + libnx definition
+c_args = [
+  '-D__SWITCH__',
+  '-march=armv8-a+crc+crypto',
+  '-mtune=cortex-a57',
+  '-mtp=soft',
+  '-fPIE',
+  '-ffunction-sections',
+  '-fdata-sections',
+  '-I', 'C:/devkitPro/devkitA64/aarch64-none-elf/include',
+  '-I', 'C:/devkitPro/portlibs/switch/include',
+  '-I', 'C:/devkitPro/libnx/include',
+]
+cpp_args = [
+  '-D__SWITCH__',
+  '-march=armv8-a+crc+crypto',
+  '-mtune=cortex-a57',
+  '-mtp=soft',
+  '-fPIE',
+  '-ffunction-sections',
+  '-fdata-sections',
+  '-DHORIZON',
+  '-I', 'C:/devkitPro/devkitA64/aarch64-none-elf/include',
+  '-I', 'C:/devkitPro/portlibs/switch/include',
+  '-I', 'C:/devkitPro/libnx/include',
+]
+# switch.specs supplies -T switch.ld -pie --no-dynamic-linker --gc-sections ...
+c_link_args = [
+  '-specs=C:/devkitPro/libnx/switch.specs',
+  '-march=armv8-a+crc+crypto',
+  '-mtune=cortex-a57',
+  '-mtp=soft',
+  '-Wl,--gc-sections',
+  '-L', 'C:/devkitPro/portlibs/switch/lib',
+  '-L', 'C:/devkitPro/libnx/lib',
+  '-lnx',
+]
+cpp_link_args = [
+  '-specs=C:/devkitPro/libnx/switch.specs',
+  '-march=armv8-a+crc+crypto',
+  '-mtune=cortex-a57',
+  '-mtp=soft',
+  '-Wl,--gc-sections',
+  '-L', 'C:/devkitPro/portlibs/switch/lib',
+  '-L', 'C:/devkitPro/libnx/lib',
+  '-lnx',
+]
+# Never let host (Windows/msys2) .pc files leak into the target build.
+pkg_config_path = [
+  'C:/devkitPro/portlibs/switch/lib/pkgconfig',
+  'C:/devkitPro/libnx/lib/pkgconfig',
+]
+
+[options]
+# mkxp-z: force GLES (Switch has no desktop GL profile, only EGL/GLES2-3 via mesa+nv)
+gfx_backend = 'gles'
+# Everything must come from portlibs, never from host python/pip/system
+default_system = 'enabled'
