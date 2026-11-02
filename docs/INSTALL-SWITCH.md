@@ -14,13 +14,14 @@
 microSD/
 └── switch/
     ├── BLACK_SOULS.nro
+    ├── mkxp.json          (конфиг движка — РЯДОМ с .nro, движок chdir в каталог .nro)
     └── black-souls/
-        ├── mkxp.json          (конфиг движка, из этого репозитория)
         └── gamedata/
             ├── Audio/
             ├── Graphics/
-            ├── Fonts/          (если есть)
-            ├── Data/           (или Game.rgss3a)
+            ├── Fonts/
+            ├── Movies/        (если есть)
+            ├── Data/          (распакованная копия — Scripts.rvdata2 внутри)
             └── Game.ini
 ```
 
@@ -49,7 +50,7 @@ Homebrew Menu → BLACK SOULS.
 
 ## Ограничения порта (текущее состояние)
 
-См. `REPORT.md` — на момент сборки порт **не подтверждён** запуском на консоли; идёт портирование движка (Этап 3).
+См. `REPORT.md`. Движок **собран** (`mkxp-z.nro`, exit 0), но запуск на консоли **ещё не проверен**. Точки диагностики: `sdmc:/mkxp-z-boot.log` (до инициализации RGSS) и `sdmc:/mkxp-z-error.log`. MIDI отключён (FluidSynth не портирован).
 
 ## Кнопки (целевая раскладка, как в PortMaster-порте)
 
