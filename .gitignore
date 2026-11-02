@@ -1,0 +1,24 @@
+# Build artifacts
+build/
+*.nro
+*.elf
+*.nacp
+*.nsp
+*.nso
+*.npdm
+*.map
+*.d
+
+# Game data (commercial assets — never commit)
+gamedata/
+Audio/
+Graphics/
+Data/
+Fonts/
+Game.rgss3a
+Game.ini
+System/
+
+# OS noise
+.DS_Store
+Thumbs.db
