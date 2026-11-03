@@ -1,0 +1,116 @@
+diff --git a/src/filesystem/filesystem.cpp b/src/filesystem/filesystem.cpp
+index 67c9be0..49316a1 100644
+--- a/src/filesystem/filesystem.cpp
++++ b/src/filesystem/filesystem.cpp
+@@ -39,6 +39,11 @@
+ #include <string.h>
+ #include <unistd.h>
+ #include <vector>
++#ifdef __SWITCH__
++#include <dirent.h>
++#include <sys/stat.h>
++extern "C" void nxBootTrace(const char *msg);
++#endif
+ 
+ #ifdef __APPLE__
+ #include <iconv.h>
+@@ -441,12 +446,96 @@ static PHYSFS_EnumerateCallbackResult cacheEnumCB(void *d, const char *origdir,
+   return PHYSFS_ENUM_OK;
+ }
+ 
++#ifdef __SWITCH__
++/* Traverse loose game data without recursively re-entering PHYSFS_enumerate.
++ * Keep the same lowercase lookup tables and first-mounted-file precedence. */
++static void nxCacheDirectory(FileSystemPrivate *p, const std::string &root,
++                             const std::string &relative, unsigned depth = 0) {
++  if (depth > 64)
++    throw Exception(Exception::PHYSFSError, "Path cache directory nesting exceeds 64");
++  const std::string physical = relative.empty() ? root : root + "/" + relative;
++  DIR *dir = opendir(physical.c_str());
++  if (!dir)
++    throw Exception(Exception::PHYSFSError, "Cannot enumerate %s", physical.c_str());
++  try {
++    std::string directoryKey = relative;
++    strTolower(directoryKey);
++    p->fileLists[directoryKey];
++    while (struct dirent *entry = readdir(dir)) {
++      if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
++        continue;
++      if (shState && shState->rtData().rqTerm)
++        throw Exception(Exception::MKXPError, "Path cache interrupted");
++      const std::string name(entry->d_name);
++      const std::string child = relative.empty() ? name : relative + "/" + name;
++      std::string key = child;
++      strTolower(key);
++      bool directory = entry->d_type == DT_DIR;
++      if (entry->d_type == DT_LNK)
++        continue;
++      if (entry->d_type == DT_UNKNOWN) {
++        struct stat st;
++        if (lstat((root + "/" + child).c_str(), &st) != 0)
++          throw Exception(Exception::PHYSFSError, "Cannot stat %s", child.c_str());
++        if (S_ISLNK(st.st_mode))
++          continue;
++        directory = S_ISDIR(st.st_mode);
++      }
++      if (directory) {
++        nxCacheDirectory(p, root, child, depth + 1);
++      } else if (!p->pathCache.contains(key)) {
++        std::string filename = name;
++        strTolower(filename);
++        p->fileLists[directoryKey].push_back(filename);
++        p->pathCache.insert(key, child);
++      }
++    }
++  } catch (...) {
++    closedir(dir);
++    throw;
++  }
++  closedir(dir);
++}
++
++static bool nxCacheLooseFiles(FileSystemPrivate *p) {
++  char **paths = PHYSFS_getSearchPath();
++  if (!paths)
++    return false;
++  bool directoriesOnly = paths[0] != nullptr;
++  for (char **path = paths; *path; ++path) {
++    struct stat st;
++    if (stat(*path, &st) != 0 || !S_ISDIR(st.st_mode)) {
++      directoriesOnly = false;
++      break;
++    }
++  }
++  try {
++    if (directoriesOnly) {
++      nxBootTrace("path cache: direct directory scan");
++      for (char **path = paths; *path; ++path)
++        nxCacheDirectory(p, *path, "");
++    }
++  } catch (...) {
++    PHYSFS_freeList(paths);
++    throw;
++  }
++  PHYSFS_freeList(paths);
++  return directoriesOnly;
++}
++#endif
++
+ void FileSystem::createPathCache() {
+   Debug() << "Loading path cache...";
+ 
+-  CacheEnumData data(p);
+-  data.fileLists.push(&p->fileLists[""]);
+-  PHYSFS_enumerate("", cacheEnumCB, &data);
++#ifdef __SWITCH__
++  if (!nxCacheLooseFiles(p))
++#endif
++  {
++    CacheEnumData data(p);
++    data.fileLists.push(&p->fileLists[""]);
++    if (!PHYSFS_enumerate("", cacheEnumCB, &data))
++      throwPhysfsError("Error enumerating path cache");
++  }
+ 
+   p->havePathCache = true;
+ 
