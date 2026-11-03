@@ -1,5 +1,5 @@
 diff --git a/src/filesystem/filesystem.cpp b/src/filesystem/filesystem.cpp
-index 67c9be0..4fa844d 100644
+index 67c9be0..4dfc48c 100644
 --- a/src/filesystem/filesystem.cpp
 +++ b/src/filesystem/filesystem.cpp
 @@ -20,6 +20,7 @@
@@ -22,6 +22,15 @@ index 67c9be0..4fa844d 100644
  
  #ifdef __APPLE__
  #include <iconv.h>
+@@ -262,7 +268,7 @@ static void initReadOps(PHYSFS_File *handle, SDL_RWops &ops, bool freeOnClose) {
+ 
+ static void strTolower(std::string &str) {
+   for (size_t i = 0; i < str.size(); ++i)
+-    str[i] = tolower(str[i]);
++    str[i] = tolower(static_cast<unsigned char>(str[i]));
+ }
+ 
+ const Uint32 SDL_RWOPS_PHYSFS = SDL_RWOPS_UNKNOWN + 10;
 @@ -324,6 +330,16 @@ FileSystem::~FileSystem() {
  }
  
@@ -142,3 +151,101 @@ index 67c9be0..4fa844d 100644
  
    p->havePathCache = true;
  
+@@ -611,6 +714,29 @@ openReadEnumCB(void *d, const char *dirpath, const char *filename) {
+   return PHYSFS_ENUM_OK;
+ }
+ 
++#ifdef __SWITCH__
++/* Handlers may copy this structure for streaming. Close the owned native
++ * RWops, but never free the stack/copy containing these forwarding callbacks. */
++static SDL_RWops nxNativeReadOps(SDL_RWops *native) {
++  SDL_RWops ops = {};
++  ops.hidden.unknown.data1 = native;
++  ops.size = [](SDL_RWops *o) -> Sint64 {
++    return SDL_RWsize(static_cast<SDL_RWops *>(o->hidden.unknown.data1));
++  };
++  ops.seek = [](SDL_RWops *o, Sint64 offset, int whence) -> Sint64 {
++    return SDL_RWseek(static_cast<SDL_RWops *>(o->hidden.unknown.data1), offset, whence);
++  };
++  ops.read = [](SDL_RWops *o, void *dst, size_t size, size_t count) -> size_t {
++    return SDL_RWread(static_cast<SDL_RWops *>(o->hidden.unknown.data1), dst, size, count);
++  };
++  ops.close = [](SDL_RWops *o) -> int {
++    return SDL_RWclose(static_cast<SDL_RWops *>(o->hidden.unknown.data1));
++  };
++  ops.type = SDL_RWOPS_UNKNOWN;
++  return ops;
++}
++#endif
++
+ void FileSystem::openRead(OpenHandler &handler, const char *filename) {
+   std::string filename_nm = normalize(filename, false, false);
+   char buffer[512];
+@@ -619,7 +745,7 @@ void FileSystem::openRead(OpenHandler &handler, const char *filename) {
+ 
+   if (p->havePathCache)
+     for (size_t i = 0; i < len; ++i)
+-      buffer[i] = tolower(buffer[i]);
++      buffer[i] = tolower(static_cast<unsigned char>(buffer[i]));
+ 
+   /* Find the deliminator separating directory and file name */
+   for (delim = buffer + len; delim > buffer; --delim)
+@@ -655,6 +781,58 @@ void FileSystem::openRead(OpenHandler &handler, const char *filename) {
+   if (data.physfsError)
+     throw Exception(Exception::PHYSFSError, "PhysFS: %s", data.physfsError);
+ 
++#ifdef __SWITCH__
++  /* Some SD directory enumerators omit non-ASCII names. If enumeration found
++   * no candidate, try exact UTF-8 loose-file paths on each mounted directory. */
++  if (data.matchCount == 0) {
++    static const char *extensions[] = {"", ".png", ".jpg", ".jpeg", ".bmp",
++      ".ogg", ".wav", ".mp3", ".mid", ".midi", ".rvdata2", ".rvdata", ".rxdata"};
++    char **mounts = PHYSFS_getSearchPath();
++    bool accepted = false;
++    if (mounts) {
++      for (char **mount = mounts; *mount && !accepted; ++mount) {
++        const std::string rootPath = filesystemImpl::normalizePath(*mount, false, true);
++        for (const char *extension : extensions) {
++          const std::string candidate = rootPath + "/" + filename_nm + extension;
++          SDL_RWops *rw = SDL_RWFromFile(candidate.c_str(), "rb");
++          if (!rw) {
++            /* FNV-1a key over the NFC UTF-8 resource path, ASCII case-folded.
++             * The repair tool uploads names rejected by FTP under this key. */
++            const std::string resource = filename_nm + extension;
++            uint64_t key = UINT64_C(14695981039346656037);
++            for (unsigned char byte : resource) {
++              if (byte >= 'A' && byte <= 'Z') byte += 'a' - 'A';
++              key = (key ^ byte) * UINT64_C(1099511628211);
++            }
++            char alias[32];
++            snprintf(alias, sizeof(alias), "%016llx", static_cast<unsigned long long>(key));
++            const std::string mapped = rootPath + "/nx-assets/" + alias;
++            rw = SDL_RWFromFile(mapped.c_str(), "rb");
++            if (rw) {
++              nxBootTrace("ASCII resource alias opened:");
++              nxBootTrace(resource.c_str());
++            }
++          }
++          if (!rw)
++            continue;
++          nxBootTrace("exact UTF-8 resource opened:");
++          nxBootTrace(candidate.c_str());
++          SDL_RWops owned = nxNativeReadOps(rw);
++          try {
++            accepted = handler.tryRead(owned, findExt(candidate.c_str()));
++          } catch (...) {
++            PHYSFS_freeList(mounts);
++            throw;
++          }
++          ++data.matchCount;
++          if (accepted)
++            break;
++        }
++      }
++      PHYSFS_freeList(mounts);
++    }
++  }
++#endif
+   if (data.matchCount == 0)
+     throw Exception(Exception::NoFileError, "%s", filename);
+ }
