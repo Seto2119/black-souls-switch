@@ -1,8 +1,52 @@
 diff --git a/src/main.cpp b/src/main.cpp
-index 92f49d1..26f4951 100644
+index 92f49d1..4147144 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
-@@ -230,6 +230,10 @@ static void setupWindowIcon(const Config &conf, SDL_Window *win) {
+@@ -125,7 +125,15 @@ static void printGLInfo() {
+ static SDL_GLContext initGL(SDL_Window *win, Config &conf,
+                             RGSSThreadData *threadData);
+ 
++#ifdef __SWITCH__
++extern "C" void nxBootTrace(const char *msg);
++#define NX_TRACE(s) nxBootTrace(s)
++#else
++#define NX_TRACE(s) ((void)0)
++#endif
++
+ int rgssThreadFun(void *userdata) {
++  NX_TRACE("RGSS thread started");
+   RGSSThreadData *threadData = static_cast<RGSSThreadData *>(userdata);
+ 
+ #ifdef MKXPZ_INIT_GL_LATER
+@@ -161,7 +169,9 @@ int rgssThreadFun(void *userdata) {
+   alcMakeContextCurrent(alcCtx);
+ 
+   try {
++    NX_TRACE("before SharedState::initInstance");
+     SharedState::initInstance(threadData);
++    NX_TRACE("after SharedState::initInstance");
+   } catch (const Exception &exc) {
+     rgssThreadError(threadData, exc.msg);
+     alcDestroyContext(alcCtx);
+@@ -170,7 +180,9 @@ int rgssThreadFun(void *userdata) {
+   }
+ 
+   /* Start script execution */
++  NX_TRACE("before script execute");
+   scriptBinding->execute();
++  NX_TRACE("after script execute");
+ 
+   threadData->rqTermAck.set();
+   threadData->ethread->requestTerminate();
+@@ -193,6 +205,7 @@ static void printRgssVersion(int ver) {
+ }
+ 
+ static void rgssThreadError(RGSSThreadData *rtData, const std::string &msg) {
++  NX_TRACE(msg.c_str());
+   rtData->rgssErrorMsg = msg;
+   rtData->ethread->requestTerminate();
+   rtData->rqTermAck.set();
+@@ -230,6 +243,10 @@ static void setupWindowIcon(const Config &conf, SDL_Window *win) {
    }
  }
  
@@ -13,7 +57,7 @@ index 92f49d1..26f4951 100644
  static SDL_Window *initVideo(const Config &conf) {
    Uint32 winFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_INPUT_FOCUS | SDL_WINDOW_ALLOW_HIGHDPI;
  
-@@ -244,6 +248,9 @@ static SDL_Window *initVideo(const Config &conf) {
+@@ -244,6 +261,9 @@ static SDL_Window *initVideo(const Config &conf) {
    winFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_INPUT_FOCUS;
  #endif
  
@@ -23,7 +67,7 @@ index 92f49d1..26f4951 100644
    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
      return nullptr;
    }
-@@ -259,6 +266,9 @@ static SDL_Window *initVideo(const Config &conf) {
+@@ -259,7 +279,11 @@ static SDL_Window *initVideo(const Config &conf) {
    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GetHintBoolean(SDL_HINT_OPENGL_ES_DRIVER, SDL_FALSE) ? SDL_GL_CONTEXT_PROFILE_ES : SDL_GL_CONTEXT_PROFILE_CORE | SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
  #endif
  
@@ -31,9 +75,11 @@ index 92f49d1..26f4951 100644
 +  nxBootTrace("before SDL_CreateWindow");
 +#endif
    SDL_Window *window = SDL_CreateWindow(conf.windowTitle.c_str(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, conf.defScreenW, conf.defScreenH, winFlags);
++  NX_TRACE("after SDL_CreateWindow");
    if (window == nullptr) {
      SDL_QuitSubSystem(SDL_INIT_VIDEO);
-@@ -349,8 +359,31 @@ int main(int argc, char *argv[]) {
+   }
+@@ -349,8 +373,31 @@ int main(int argc, char *argv[]) {
  #endif
  
      /* now we load the config */
@@ -65,7 +111,7 @@ index 92f49d1..26f4951 100644
      if (conf.windowTitle.empty())
        conf.windowTitle = conf.game.title;
  
-@@ -368,12 +401,18 @@ int main(int argc, char *argv[]) {
+@@ -368,12 +415,18 @@ int main(int argc, char *argv[]) {
      }
  #endif
  
@@ -84,3 +130,194 @@ index 92f49d1..26f4951 100644
      SDL_Window *win = nullptr;
  
  #ifdef MKXPZ_CHECK_FOR_WAYLAND_SUPPORT
+@@ -624,6 +677,7 @@ int main(int argc, char *argv[]) {
+       return 0;
+     }
+ 
++    NX_TRACE("before allocUserEvents");
+     if (!EventThread::allocUserEvents()) {
+       showInitError("Error allocating SDL user events");
+       return 0;
+@@ -641,6 +695,7 @@ int main(int argc, char *argv[]) {
+     assert(conf.rgssVersion >= 1 && conf.rgssVersion <= 3);
+     printRgssVersion(conf.rgssVersion);
+ 
++    NX_TRACE("before IMG_Init");
+     int imgFlags = IMG_INIT_PNG | IMG_INIT_JPG;
+     if (IMG_Init(imgFlags) != imgFlags) {
+       showInitError(std::string("Error initializing SDL_image: ") +
+@@ -654,6 +709,7 @@ int main(int argc, char *argv[]) {
+       return 0;
+     }
+ 
++    NX_TRACE("before TTF_Init");
+     if (TTF_Init() < 0) {
+       showInitError(std::string("Error initializing SDL_ttf: ") +
+                     SDL_GetError());
+@@ -667,6 +723,7 @@ int main(int argc, char *argv[]) {
+       return 0;
+     }
+ 
++    NX_TRACE("before Sound_Init");
+     if (Sound_Init() == 0) {
+       showInitError(std::string("Error initializing SDL_sound: ") +
+                     Sound_GetError());
+@@ -731,7 +788,9 @@ int main(int argc, char *argv[]) {
+     (void)setupWindowIcon;
+ #endif
+ 
++    NX_TRACE("before alcOpenDevice");
+     ALCdevice *alcDev = alcOpenDevice(0);
++    NX_TRACE("after alcOpenDevice");
+ 
+     if (!alcDev) {
+       showInitError("Could not detect an available audio device.");
+@@ -747,7 +806,9 @@ int main(int argc, char *argv[]) {
+     }
+ 
+     SDL_DisplayMode mode;
++    NX_TRACE("before SDL_GetDisplayMode");
+     SDL_GetDisplayMode(0, 0, &mode);
++    NX_TRACE("after SDL_GetDisplayMode");
+ 
+     /* Can't sync to display refresh rate if its value is unknown */
+     if (!mode.refresh_rate)
+@@ -756,7 +817,9 @@ int main(int argc, char *argv[]) {
+     EventThread eventThread;
+ 
+ #ifndef MKXPZ_INIT_GL_LATER
++    NX_TRACE("before initGL");
+     SDL_GLContext glCtx = initGL(win, conf, 0);
++    NX_TRACE("after initGL");
+ #else
+     SDL_GLContext glCtx = NULL;
+ #endif
+@@ -772,7 +835,9 @@ int main(int argc, char *argv[]) {
+     rtData.drawableSizeMsg.post(Vec2i(drwW, drwH));
+ 
+     /* Load and post key bindings */
++    NX_TRACE("before loadBindings");
+     rtData.bindingUpdateMsg.post(loadBindings(conf));
++    NX_TRACE("after loadBindings");
+     
+ #ifdef __APPLE__
+     // Create Touch Bar
+@@ -780,10 +845,13 @@ int main(int argc, char *argv[]) {
+ #endif
+ 
+     /* Start RGSS thread */
++    NX_TRACE("before create RGSS thread");
+     SDL_Thread *rgssThread = SDL_CreateThread(rgssThreadFun, "rgss", &rtData);
+ 
+     /* Start event processing */
++    NX_TRACE("before event processing");
+     eventThread.process(rtData);
++    NX_TRACE("after event processing");
+ 
+     /* Request RGSS thread to stop */
+     rtData.rqTerm.set();
+@@ -812,8 +880,12 @@ int main(int argc, char *argv[]) {
+ 
+     if (!rtData.rgssErrorMsg.empty()) {
+       Debug() << rtData.rgssErrorMsg;
++#ifdef __SWITCH__
++      showInitError(rtData.rgssErrorMsg);
++#else
+       SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, conf.game.title.c_str(),
+                                rtData.rgssErrorMsg.c_str(), win);
++#endif
+     }
+ 
+     if (rtData.glContext)
+diff --git a/src/sharedstate.cpp b/src/sharedstate.cpp
+index 83af953..71ff74a 100644
+--- a/src/sharedstate.cpp
++++ b/src/sharedstate.cpp
+@@ -60,6 +60,13 @@ static const char *gameArchExt()
+ 	return 0;
+ }
+ 
++#ifdef __SWITCH__
++extern "C" void nxBootTrace(const char *msg);
++#define NX_RESOURCE_TRACE(msg) nxBootTrace(msg)
++#else
++#define NX_RESOURCE_TRACE(msg) ((void)0)
++#endif
++
+ struct SharedStatePrivate
+ {
+ 	void *bindingData;
+@@ -104,16 +111,16 @@ struct SharedStatePrivate
+ 	SharedStatePrivate(RGSSThreadData *threadData)
+ 	    : bindingData(0),
+ 	      sdlWindow(threadData->window),
+-	      fileSystem(threadData->argv0, threadData->config.allowSymlinks),
++	      fileSystem((NX_RESOURCE_TRACE("construct FileSystem"), threadData->argv0), threadData->config.allowSymlinks),
+ 	      eThread(*threadData->ethread),
+ 	      rtData(*threadData),
+ 	      config(threadData->config),
+-	      midiState(threadData->config),
+-	      graphics(threadData),
+-	      input(*threadData),
+-	      audio(*threadData),
+-	      _glState(threadData->config),
+-	      fontState(threadData->config),
++	      midiState((NX_RESOURCE_TRACE("construct MIDI state"), threadData->config)),
++	      graphics((NX_RESOURCE_TRACE("construct Graphics"), threadData)),
++	      input((NX_RESOURCE_TRACE("construct Input"), *threadData)),
++	      audio((NX_RESOURCE_TRACE("construct Audio"), *threadData)),
++	      _glState((NX_RESOURCE_TRACE("construct GLState; shaders next"), threadData->config)),
++	      fontState((NX_RESOURCE_TRACE("construct FontState; shaders finished"), threadData->config)),
+ 	      stampCounter(0)
+ 	{}
+ 	
+@@ -139,15 +146,21 @@ struct SharedStatePrivate
+ 			fclose(tmp);
+ 		}
+ 
++		NX_RESOURCE_TRACE("before mount game directory");
+ 		fileSystem.addPath(".");
+ 
+ 		for (size_t i = 0; i < config.rtps.size(); ++i)
+ 			fileSystem.addPath(config.rtps[i].c_str());
+ 
+-		if (config.pathCache)
+-			fileSystem.createPathCache();
++		if (config.pathCache) {
++            NX_RESOURCE_TRACE("before path cache");
++            fileSystem.createPathCache();
++            NX_RESOURCE_TRACE("after path cache");
++        }
+ 
++		NX_RESOURCE_TRACE("before initFontSets");
+ 		fileSystem.initFontSets(fontState);
++		NX_RESOURCE_TRACE("after initFontSets");
+ 
+ 		globalTexW = 128;
+ 		globalTexH = 64;
+@@ -186,8 +199,11 @@ void SharedState::initInstance(RGSSThreadData *threadData)
+ 
+ 	rgssVersion = threadData->config.rgssVersion;
+     
++	NX_RESOURCE_TRACE("before GlobalIBO constructor");
+ 	_globalIBO = new GlobalIBO();
++	NX_RESOURCE_TRACE("before GlobalIBO ensureSize");
+ 	_globalIBO->ensureSize(1);
++	NX_RESOURCE_TRACE("after GlobalIBO ensureSize");
+ 
+ 	SharedState::instance = 0;
+ 	Font *defaultFont = 0;
+@@ -383,10 +399,13 @@ unsigned int SharedState::genTimeStamp()
+ SharedState::SharedState(RGSSThreadData *threadData)
+ {
+ 	p = new SharedStatePrivate(threadData);
++	NX_RESOURCE_TRACE("SharedStatePrivate constructed");
+ 	SharedState::instance = this;
+ 	try
+ 	{
++		NX_RESOURCE_TRACE("before SharedStatePrivate init");
+ 		p->init(threadData);
++		NX_RESOURCE_TRACE("after SharedStatePrivate init");
+ 		p->screen = p->graphics.getScreen();
+ 	}
+ 	catch (const Exception &exc)
