@@ -1,5 +1,5 @@
 diff --git a/src/filesystem/filesystem.cpp b/src/filesystem/filesystem.cpp
-index 67c9be0..4dfc48c 100644
+index 67c9be0..751d6aa 100644
 --- a/src/filesystem/filesystem.cpp
 +++ b/src/filesystem/filesystem.cpp
 @@ -20,6 +20,7 @@
@@ -199,7 +199,7 @@ index 67c9be0..4dfc48c 100644
 +   * no candidate, try exact UTF-8 loose-file paths on each mounted directory. */
 +  if (data.matchCount == 0) {
 +    static const char *extensions[] = {"", ".png", ".jpg", ".jpeg", ".bmp",
-+      ".ogg", ".wav", ".mp3", ".mid", ".midi", ".rvdata2", ".rvdata", ".rxdata"};
++      ".ogg", ".wav", ".mp3", ".mid", ".midi", ".ogv", ".rvdata2", ".rvdata", ".rxdata"};
 +    char **mounts = PHYSFS_getSearchPath();
 +    bool accepted = false;
 +    if (mounts) {
