@@ -1,0 +1,22 @@
+diff --git a/src/filesystem/filesystemImpl.cpp b/src/filesystem/filesystemImpl.cpp
+index 1d79dee..800e4fa 100644
+--- a/src/filesystem/filesystemImpl.cpp
++++ b/src/filesystem/filesystemImpl.cpp
+@@ -71,7 +71,16 @@ std::string filesystemImpl::getCurrentDirectory() {
+ std::string filesystemImpl::normalizePath(const char *path, bool preferred, bool absolute) {
+     fs::path stdPath(path);
+     
+-    if (!stdPath.is_absolute() && absolute)
++    bool isAbsolute = stdPath.is_absolute();
++#ifdef __SWITCH__
++    /* ghc::filesystem uses POSIX path rules and treats sdmc:/ as relative. */
++    const std::string rawPath(path);
++    const size_t deviceEnd = rawPath.find(":/");
++    if (deviceEnd != std::string::npos && deviceEnd > 0 &&
++        rawPath.find('/') == deviceEnd + 1)
++        isAbsolute = true;
++#endif
++    if (!isAbsolute && absolute)
+         stdPath = fs::current_path() / stdPath;
+ 
+     stdPath = stdPath.lexically_normal();
