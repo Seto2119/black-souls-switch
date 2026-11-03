@@ -1,8 +1,18 @@
 diff --git a/binding/binding-mri.cpp b/binding/binding-mri.cpp
-index b6344f9..52bdf30 100644
+index b6344f9..f782ac3 100644
 --- a/binding/binding-mri.cpp
 +++ b/binding/binding-mri.cpp
-@@ -301,7 +301,15 @@ static void mriBindingInit() {
+@@ -41,6 +41,9 @@
+ #include "eventthread.h"
+ 
+ #include <vector>
++#ifdef __SWITCH__
++#include <ruby/debug.h>
++#endif
+ #include "util/rapidcsv.h"
+ 
+ extern "C" {
+@@ -301,7 +304,15 @@ static void mriBindingInit() {
  }
  
  static void showMsg(const std::string &msg) {
@@ -18,7 +28,7 @@ index b6344f9..52bdf30 100644
  }
  
  static void printP(int argc, VALUE *argv, const char *convMethod,
-@@ -957,6 +965,7 @@ bool evalScript(VALUE string, const char *filename)
+@@ -957,6 +968,7 @@ bool evalScript(VALUE string, const char *filename)
  static void runRMXPScripts(BacktraceData &btData) {
      const Config &conf = shState->rtData().config;
      const std::string &scriptPack = conf.game.scripts;
@@ -26,7 +36,7 @@ index b6344f9..52bdf30 100644
      
      if (scriptPack.empty()) {
          showMsg("No script file has been specified. Check the game's INI and try again.");
-@@ -987,6 +996,7 @@ static void runRMXPScripts(BacktraceData &btData) {
+@@ -987,6 +999,7 @@ static void runRMXPScripts(BacktraceData &btData) {
      rb_gv_set("$RGSS_SCRIPTS", scriptArray);
      
      long scriptCount = RARRAY_LEN(scriptArray);
@@ -34,7 +44,7 @@ index b6344f9..52bdf30 100644
      
      std::string decodeBuffer;
      decodeBuffer.resize(0x1000);
-@@ -1099,8 +1109,10 @@ static void runRMXPScripts(BacktraceData &btData) {
+@@ -1099,8 +1112,10 @@ static void runRMXPScripts(BacktraceData &btData) {
              int state;
              
              evalString(string, fname, &state);
@@ -46,16 +56,15 @@ index b6344f9..52bdf30 100644
          }
          
          VALUE exc = rb_gv_get("$!");
-@@ -1113,71 +1125,29 @@ static void runRMXPScripts(BacktraceData &btData) {
+@@ -1112,72 +1127,60 @@ static void runRMXPScripts(BacktraceData &btData) {
+     }
  }
  
- static void showExc(VALUE exc, const BacktraceData &btData) {
+-static void showExc(VALUE exc, const BacktraceData &btData) {
 -    VALUE bt = rb_funcall2(exc, rb_intern("backtrace"), 0, NULL);
 -    VALUE msg = rb_funcall2(exc, rb_intern("message"), 0, NULL);
 -    VALUE bt0 = rb_ary_entry(bt, 0);
-+    /* Exception#backtrace may legitimately be nil (e.g. freshly constructed
-+     * exceptions). Never call Ruby array/string accessors before type checks. */
-     VALUE name = rb_class_path(rb_obj_class(exc));
+-    VALUE name = rb_class_path(rb_obj_class(exc));
 -    
 -    VALUE ds = rb_sprintf("%" PRIsVALUE ": %" PRIsVALUE " (%" PRIsVALUE ")",
 -#if RAPI_MAJOR >= 2
@@ -63,7 +72,32 @@ index b6344f9..52bdf30 100644
 -#else
 -    // Ruby 1.9's version of this function needs char*
 -    RSTRING_PTR(bt0), RSTRING_PTR(exc), RSTRING_PTR(name));
--#endif
++#ifdef __SWITCH__
++struct NxRubyTraceRing {
++    char entries[128][512];
++    unsigned next = 0;
++    unsigned count = 0;
++};
++static NxRubyTraceRing nxRubyTrace;
++static void nxRubyTraceEvent(VALUE point, void *) {
++    rb_trace_arg_t *arg = rb_tracearg_from_tracepoint(point);
++    VALUE path = rb_tracearg_path(arg);
++    VALUE method = rb_tracearg_method_id(arg);
++    VALUE line = rb_tracearg_lineno(arg);
++    const char *file = RB_TYPE_P(path, RUBY_T_STRING) ? RSTRING_PTR(path) : "native";
++    const char *name = SYMBOL_P(method) ? rb_id2name(SYM2ID(method)) : "main";
++    snprintf(nxRubyTrace.entries[nxRubyTrace.next], 512, "%.*s:%d %s",
++             340, file, NIL_P(line) ? 0 : NUM2INT(line), name ? name : "?");
++    nxRubyTrace.next = (nxRubyTrace.next + 1) % 128;
++    if (nxRubyTrace.count < 128) ++nxRubyTrace.count;
++}
++static void nxDumpRubyTrace() {
++    Debug() << "Recent Ruby execution before exception:";
++    const unsigned start = (nxRubyTrace.next + 128 - nxRubyTrace.count) % 128;
++    for (unsigned i = 0; i < nxRubyTrace.count; ++i)
++        Debug() << nxRubyTrace.entries[(start + i) % 128];
++}
+ #endif
 -    /* omit "useless" last entry (from ruby:1:in `eval') */
 -    for (long i = 1, btlen = RARRAY_LEN(bt) - 1; i < btlen; ++i)
 -        rb_str_catf(ds, "\n\tfrom %" PRIsVALUE,
@@ -71,7 +105,11 @@ index b6344f9..52bdf30 100644
 -                    rb_ary_entry(bt, i));
 -#else
 -    RSTRING_PTR(rb_ary_entry(bt, i)));
--#endif
++
++static void showExc(VALUE exc, const BacktraceData &btData) {
++#ifdef __SWITCH__
++    nxDumpRubyTrace();
+ #endif
 -    Debug() << StringValueCStr(ds);
 -    
 -    char *s = RSTRING_PTR(bt0);
@@ -117,6 +155,9 @@ index b6344f9..52bdf30 100644
 -             file.c_str(), line, RSTRING_PTR(name), RSTRING_PTR(msg));
 -    
 -    showMsg(ms);
++    /* Exception#backtrace may legitimately be nil (e.g. freshly constructed
++     * exceptions). Never call Ruby array/string accessors before type checks. */
++    VALUE name = rb_class_path(rb_obj_class(exc));
 +    VALUE msg = rb_obj_as_string(rb_funcall2(exc, rb_intern("message"), 0, NULL));
 +    std::string report(RSTRING_PTR(name), RSTRING_LEN(name));
 +    report += ": ";
@@ -140,7 +181,7 @@ index b6344f9..52bdf30 100644
  }
  
  static void mriBindingExecute() {
-@@ -1192,7 +1162,9 @@ static void mriBindingExecute() {
+@@ -1192,7 +1195,9 @@ static void mriBindingExecute() {
      ruby_sysinit(&argc, &argv);
      
      RUBY_INIT_STACK;
@@ -150,7 +191,7 @@ index b6344f9..52bdf30 100644
      
      std::vector<const char*> rubyArgsC{"mkxp-z"};
      rubyArgsC.push_back("-e ");
-@@ -1228,6 +1200,7 @@ static void mriBindingExecute() {
+@@ -1228,6 +1233,7 @@ static void mriBindingExecute() {
      
      int state;
      bool valid = ruby_executable_node(node, &state);
@@ -158,18 +199,57 @@ index b6344f9..52bdf30 100644
      if (valid)
          state = ruby_exec_node(node);
      if (state || !valid) {
-@@ -1292,7 +1265,9 @@ static void mriBindingExecute() {
+@@ -1292,8 +1298,36 @@ static void mriBindingExecute() {
      shState->setBindingData(&rbData);
      BacktraceData btData;
      
++#ifdef __SWITCH__
++    {
++        int probeState = 0;
++        VALUE probe = rb_eval_string_protect("__nx_f = Fiber.new { Fiber.yield(11); GC.start; 22 }; __nx_f.resume + __nx_f.resume", &probeState);
++        if (probeState) {
++            VALUE error = rb_errinfo();
++            VALUE detail = rb_obj_as_string(error);
++            Debug() << "Ruby Fiber self-test failed:" << StringValueCStr(detail);
++            showMsg(std::string("Ruby Fiber self-test failed: ") + StringValueCStr(detail));
++            rb_set_errinfo(Qnil);
++            ruby_cleanup(1);
++            shState->rtData().rqTermAck.set();
++            return;
++        } else {
++            Debug() << "Ruby Fiber self-test returned:" << NUM2INT(probe);
++        }
++    }
++#endif
 +    Debug() << "Ruby: before binding init";
      mriBindingInit();
+-    
 +    Debug() << "Ruby: after binding init";
-     
++
++#ifdef __SWITCH__
++    nxRubyTrace.next = nxRubyTrace.count = 0;
++    VALUE nxTracePoint = rb_tracepoint_new(Qnil,
++        RUBY_EVENT_CALL | RUBY_EVENT_C_CALL | RUBY_EVENT_LINE,
++        nxRubyTraceEvent, nullptr);
++    rb_gc_register_address(&nxTracePoint);
++    rb_tracepoint_enable(nxTracePoint);
++#endif
      std::string &customScript = conf.customScript;
      if (!customScript.empty())
+         runCustomScript(customScript);
+@@ -1304,6 +1338,10 @@ static void mriBindingExecute() {
+     VALUE exc = rb_errinfo();
+ #else
+     VALUE exc = rb_gv_get("$!");
++#endif
++#ifdef __SWITCH__
++    rb_tracepoint_disable(nxTracePoint);
++    rb_gc_unregister_address(&nxTracePoint);
+ #endif
+     if (!NIL_P(exc) && !rb_obj_is_kind_of(exc, rb_eSystemExit))
+         showExc(exc, btData);
 diff --git a/src/main.cpp b/src/main.cpp
-index 92f49d1..2ebcb62 100644
+index 92f49d1..4f471a1 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
 @@ -125,7 +125,23 @@ static void printGLInfo() {
@@ -276,7 +356,7 @@ index 92f49d1..2ebcb62 100644
  int main(int argc, char *argv[]) {
  #ifdef __SWITCH__
 -    nxBootTrace("main() reached");
-+    nxBootTrace("main() reached; build rgss-stack-8mb-1");
++    nxBootTrace("main() reached; build ruby-arm64-fibers-1");
 +    freopen("sdmc:/mkxp-z-stdout.log", "a", stdout);
 +    freopen("sdmc:/mkxp-z-stderr.log", "a", stderr);
      {
