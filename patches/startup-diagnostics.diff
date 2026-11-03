@@ -1,5 +1,69 @@
+diff --git a/binding/binding-mri.cpp b/binding/binding-mri.cpp
+index b6344f9..3fd007b 100644
+--- a/binding/binding-mri.cpp
++++ b/binding/binding-mri.cpp
+@@ -301,7 +301,15 @@ static void mriBindingInit() {
+ }
+ 
+ static void showMsg(const std::string &msg) {
++#ifdef __SWITCH__
++    Debug() << "Ruby message:" << msg;
++    if (FILE *log = fopen("sdmc:/mkxp-z-ruby-error.log", "a")) {
++        fprintf(log, "%s\n", msg.c_str());
++        fclose(log);
++    }
++#else
+     shState->eThread().showMessageBox(msg.c_str());
++#endif
+ }
+ 
+ static void printP(int argc, VALUE *argv, const char *convMethod,
+@@ -957,6 +965,7 @@ bool evalScript(VALUE string, const char *filename)
+ static void runRMXPScripts(BacktraceData &btData) {
+     const Config &conf = shState->rtData().config;
+     const std::string &scriptPack = conf.game.scripts;
++    Debug() << "Ruby script archive:" << scriptPack;
+     
+     if (scriptPack.empty()) {
+         showMsg("No script file has been specified. Check the game's INI and try again.");
+@@ -987,6 +996,7 @@ static void runRMXPScripts(BacktraceData &btData) {
+     rb_gv_set("$RGSS_SCRIPTS", scriptArray);
+     
+     long scriptCount = RARRAY_LEN(scriptArray);
++    Debug() << "Ruby script count:" << scriptCount;
+     
+     std::string decodeBuffer;
+     decodeBuffer.resize(0x1000);
+@@ -1192,7 +1202,9 @@ static void mriBindingExecute() {
+     ruby_sysinit(&argc, &argv);
+     
+     RUBY_INIT_STACK;
++    Debug() << "Ruby: before ruby_init";
+     ruby_init();
++    Debug() << "Ruby: after ruby_init";
+     
+     std::vector<const char*> rubyArgsC{"mkxp-z"};
+     rubyArgsC.push_back("-e ");
+@@ -1228,6 +1240,7 @@ static void mriBindingExecute() {
+     
+     int state;
+     bool valid = ruby_executable_node(node, &state);
++    Debug() << "Ruby executable node:" << valid << "state:" << state;
+     if (valid)
+         state = ruby_exec_node(node);
+     if (state || !valid) {
+@@ -1292,7 +1305,9 @@ static void mriBindingExecute() {
+     shState->setBindingData(&rbData);
+     BacktraceData btData;
+     
++    Debug() << "Ruby: before binding init";
+     mriBindingInit();
++    Debug() << "Ruby: after binding init";
+     
+     std::string &customScript = conf.customScript;
+     if (!customScript.empty())
 diff --git a/src/main.cpp b/src/main.cpp
-index 92f49d1..4147144 100644
+index 92f49d1..510e078 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
 @@ -125,7 +125,15 @@ static void printGLInfo() {
@@ -79,7 +143,18 @@ index 92f49d1..4147144 100644
    if (window == nullptr) {
      SDL_QuitSubSystem(SDL_INIT_VIDEO);
    }
-@@ -349,8 +373,31 @@ int main(int argc, char *argv[]) {
+@@ -303,7 +327,9 @@ static void nxSetupWorkdir(int argc, char *argv[]) {
+ 
+ int main(int argc, char *argv[]) {
+ #ifdef __SWITCH__
+-    nxBootTrace("main() reached");
++    nxBootTrace("main() reached; build ruby-diagnostics-1");
++    freopen("sdmc:/mkxp-z-stdout.log", "a", stdout);
++    freopen("sdmc:/mkxp-z-stderr.log", "a", stderr);
+     {
+         char msg[512];
+         snprintf(msg, sizeof(msg), "argc=%d argv[0]=%s", argc,
+@@ -349,8 +375,31 @@ int main(int argc, char *argv[]) {
  #endif
  
      /* now we load the config */
@@ -111,7 +186,7 @@ index 92f49d1..4147144 100644
      if (conf.windowTitle.empty())
        conf.windowTitle = conf.game.title;
  
-@@ -368,12 +415,18 @@ int main(int argc, char *argv[]) {
+@@ -368,12 +417,18 @@ int main(int argc, char *argv[]) {
      }
  #endif
  
@@ -130,7 +205,7 @@ index 92f49d1..4147144 100644
      SDL_Window *win = nullptr;
  
  #ifdef MKXPZ_CHECK_FOR_WAYLAND_SUPPORT
-@@ -624,6 +677,7 @@ int main(int argc, char *argv[]) {
+@@ -624,6 +679,7 @@ int main(int argc, char *argv[]) {
        return 0;
      }
  
@@ -138,7 +213,7 @@ index 92f49d1..4147144 100644
      if (!EventThread::allocUserEvents()) {
        showInitError("Error allocating SDL user events");
        return 0;
-@@ -641,6 +695,7 @@ int main(int argc, char *argv[]) {
+@@ -641,6 +697,7 @@ int main(int argc, char *argv[]) {
      assert(conf.rgssVersion >= 1 && conf.rgssVersion <= 3);
      printRgssVersion(conf.rgssVersion);
  
@@ -146,7 +221,7 @@ index 92f49d1..4147144 100644
      int imgFlags = IMG_INIT_PNG | IMG_INIT_JPG;
      if (IMG_Init(imgFlags) != imgFlags) {
        showInitError(std::string("Error initializing SDL_image: ") +
-@@ -654,6 +709,7 @@ int main(int argc, char *argv[]) {
+@@ -654,6 +711,7 @@ int main(int argc, char *argv[]) {
        return 0;
      }
  
@@ -154,7 +229,7 @@ index 92f49d1..4147144 100644
      if (TTF_Init() < 0) {
        showInitError(std::string("Error initializing SDL_ttf: ") +
                      SDL_GetError());
-@@ -667,6 +723,7 @@ int main(int argc, char *argv[]) {
+@@ -667,6 +725,7 @@ int main(int argc, char *argv[]) {
        return 0;
      }
  
@@ -162,7 +237,7 @@ index 92f49d1..4147144 100644
      if (Sound_Init() == 0) {
        showInitError(std::string("Error initializing SDL_sound: ") +
                      Sound_GetError());
-@@ -731,7 +788,9 @@ int main(int argc, char *argv[]) {
+@@ -731,7 +790,9 @@ int main(int argc, char *argv[]) {
      (void)setupWindowIcon;
  #endif
  
@@ -172,7 +247,7 @@ index 92f49d1..4147144 100644
  
      if (!alcDev) {
        showInitError("Could not detect an available audio device.");
-@@ -747,7 +806,9 @@ int main(int argc, char *argv[]) {
+@@ -747,7 +808,9 @@ int main(int argc, char *argv[]) {
      }
  
      SDL_DisplayMode mode;
@@ -182,7 +257,7 @@ index 92f49d1..4147144 100644
  
      /* Can't sync to display refresh rate if its value is unknown */
      if (!mode.refresh_rate)
-@@ -756,7 +817,9 @@ int main(int argc, char *argv[]) {
+@@ -756,7 +819,9 @@ int main(int argc, char *argv[]) {
      EventThread eventThread;
  
  #ifndef MKXPZ_INIT_GL_LATER
@@ -192,7 +267,7 @@ index 92f49d1..4147144 100644
  #else
      SDL_GLContext glCtx = NULL;
  #endif
-@@ -772,7 +835,9 @@ int main(int argc, char *argv[]) {
+@@ -772,7 +837,9 @@ int main(int argc, char *argv[]) {
      rtData.drawableSizeMsg.post(Vec2i(drwW, drwH));
  
      /* Load and post key bindings */
@@ -202,7 +277,7 @@ index 92f49d1..4147144 100644
      
  #ifdef __APPLE__
      // Create Touch Bar
-@@ -780,10 +845,13 @@ int main(int argc, char *argv[]) {
+@@ -780,10 +847,13 @@ int main(int argc, char *argv[]) {
  #endif
  
      /* Start RGSS thread */
@@ -216,7 +291,7 @@ index 92f49d1..4147144 100644
  
      /* Request RGSS thread to stop */
      rtData.rqTerm.set();
-@@ -812,8 +880,12 @@ int main(int argc, char *argv[]) {
+@@ -812,8 +882,12 @@ int main(int argc, char *argv[]) {
  
      if (!rtData.rgssErrorMsg.empty()) {
        Debug() << rtData.rgssErrorMsg;
@@ -321,3 +396,29 @@ index 83af953..71ff74a 100644
  		p->screen = p->graphics.getScreen();
  	}
  	catch (const Exception &exc)
+diff --git a/src/util/debugwriter.h b/src/util/debugwriter.h
+index da12825..27a4a96 100644
+--- a/src/util/debugwriter.h
++++ b/src/util/debugwriter.h
+@@ -31,6 +31,10 @@
+ #endif
+ 
+ 
++#ifdef __SWITCH__
++extern "C" void nxBootTrace(const char *msg);
++#endif
++
+ /* A cheap replacement for qDebug() */
+ 
+ class Debug
+@@ -61,7 +65,9 @@ public:
+ 
+ 	~Debug()
+ 	{
+-#ifdef __ANDROID__
++#if defined(__SWITCH__)
++        nxBootTrace(buf.str().c_str());
++#elif defined(__ANDROID__)
+ 		__android_log_write(ANDROID_LOG_DEBUG, "mkxp", buf.str().c_str());
+ #else
+ 		std::cerr << buf.str() << std::endl;
