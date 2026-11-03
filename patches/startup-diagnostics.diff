@@ -1,0 +1,86 @@
+diff --git a/src/main.cpp b/src/main.cpp
+index 92f49d1..26f4951 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -230,6 +230,10 @@ static void setupWindowIcon(const Config &conf, SDL_Window *win) {
+   }
+ }
+ 
++#ifdef __SWITCH__
++extern "C" void nxBootTrace(const char *msg);
++#endif
++
+ static SDL_Window *initVideo(const Config &conf) {
+   Uint32 winFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_INPUT_FOCUS | SDL_WINDOW_ALLOW_HIGHDPI;
+ 
+@@ -244,6 +248,9 @@ static SDL_Window *initVideo(const Config &conf) {
+   winFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_INPUT_FOCUS;
+ #endif
+ 
++#ifdef __SWITCH__
++  nxBootTrace("before SDL_Init video");
++#endif
+   if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+     return nullptr;
+   }
+@@ -259,6 +266,9 @@ static SDL_Window *initVideo(const Config &conf) {
+   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GetHintBoolean(SDL_HINT_OPENGL_ES_DRIVER, SDL_FALSE) ? SDL_GL_CONTEXT_PROFILE_ES : SDL_GL_CONTEXT_PROFILE_CORE | SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
+ #endif
+ 
++#ifdef __SWITCH__
++  nxBootTrace("before SDL_CreateWindow");
++#endif
+   SDL_Window *window = SDL_CreateWindow(conf.windowTitle.c_str(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, conf.defScreenW, conf.defScreenH, winFlags);
+   if (window == nullptr) {
+     SDL_QuitSubSystem(SDL_INIT_VIDEO);
+@@ -349,8 +359,31 @@ int main(int argc, char *argv[]) {
+ #endif
+ 
+     /* now we load the config */
++#ifdef __SWITCH__
++    nxBootTrace("before Config construction");
++#endif
+     Config conf;
++#ifdef __SWITCH__
++    nxBootTrace("before Config::read");
++    try {
++      conf.read(argc, argv);
++    } catch (const Exception &e) {
++      nxBootTrace(e.msg.c_str());
++      showInitError(e.msg);
++      return 1;
++    } catch (const std::exception &e) {
++      nxBootTrace(e.what());
++      showInitError(e.what());
++      return 1;
++    } catch (...) {
++      nxBootTrace("Unknown exception in Config::read");
++      showInitError("Unknown exception in Config::read");
++      return 1;
++    }
++    nxBootTrace("after Config::read");
++#else
+     conf.read(argc, argv);
++#endif
+     if (conf.windowTitle.empty())
+       conf.windowTitle = conf.game.title;
+ 
+@@ -368,12 +401,18 @@ int main(int argc, char *argv[]) {
+     }
+ #endif
+ 
++#ifdef __SWITCH__
++    nxBootTrace("before SDL_Init controller/timer");
++#endif
+     /* initialize SDL first */
+     if (SDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_TIMER) < 0) {
+       showInitError(std::string("Error initializing SDL: ") + SDL_GetError());
+       return 0;
+     }
+ 
++#ifdef __SWITCH__
++    nxBootTrace("after SDL_Init controller/timer");
++#endif
+     SDL_Window *win = nullptr;
+ 
+ #ifdef MKXPZ_CHECK_FOR_WAYLAND_SUPPORT
