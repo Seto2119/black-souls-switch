@@ -104,3 +104,27 @@ void nxBootTrace(const char *msg)
     fprintf(log, "%s\n", msg);
     fflush(log);
 }
+
+/* Ruby must query the currently executing libnx thread, including RGSS and
+ * pthread-backed fibers. A fabricated/default stack bound breaks both its
+ * stack overflow checks and conservative GC scanning. */
+#include <pthread.h>
+#include <switch.h>
+int pthread_getattr_np(pthread_t thread, pthread_attr_t *attr)
+{
+    if (!attr || !pthread_equal(thread, pthread_self()))
+        return EINVAL;
+    Thread *self = threadGetSelf();
+    if (!self || !self->stack_mem || !self->stack_sz)
+        return ENOENT;
+    int result = pthread_attr_init(attr);
+    if (result)
+        return result;
+    char detail[160];
+    snprintf(detail, sizeof(detail), "Ruby stack bounds: base=%p size=%zu", self->stack_mem, self->stack_sz);
+    nxBootTrace(detail);
+    result = pthread_attr_setstack(attr, self->stack_mem, self->stack_sz);
+    if (result)
+        pthread_attr_destroy(attr);
+    return result;
+}
