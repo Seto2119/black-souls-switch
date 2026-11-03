@@ -1,8 +1,16 @@
 diff --git a/src/filesystem/filesystem.cpp b/src/filesystem/filesystem.cpp
-index 67c9be0..49316a1 100644
+index 67c9be0..4fa844d 100644
 --- a/src/filesystem/filesystem.cpp
 +++ b/src/filesystem/filesystem.cpp
-@@ -39,6 +39,11 @@
+@@ -20,6 +20,7 @@
+ */
+ 
+ #include "filesystem.h"
++#include "filesystemImpl.h"
+ 
+ #include "util/boost-hash.h"
+ #include "util/debugwriter.h"
+@@ -39,6 +40,11 @@
  #include <string.h>
  #include <unistd.h>
  #include <vector>
@@ -14,7 +22,24 @@ index 67c9be0..49316a1 100644
  
  #ifdef __APPLE__
  #include <iconv.h>
-@@ -441,12 +446,96 @@ static PHYSFS_EnumerateCallbackResult cacheEnumCB(void *d, const char *origdir,
+@@ -324,6 +330,16 @@ FileSystem::~FileSystem() {
+ }
+ 
+ void FileSystem::addPath(const char *path, const char *mountpoint, bool reload) {
++#ifdef __SWITCH__
++  /* An empty RTP entry means no RTP. Resolve directory mounts before PhysFS
++   * stores them: opendir("") may use cwd, but "" + "/Audio" names SD root. */
++  if (!path || !*path)
++    return;
++  const std::string resolvedPath = filesystemImpl::normalizePath(path, false, true);
++  path = resolvedPath.c_str();
++  nxBootTrace("mounting game resource path:");
++  nxBootTrace(path);
++#endif
+   /* Try the normal mount first */
+     int state = PHYSFS_mount(path, mountpoint, 1);
+   if (!state) {
+@@ -441,12 +457,99 @@ static PHYSFS_EnumerateCallbackResult cacheEnumCB(void *d, const char *origdir,
    return PHYSFS_ENUM_OK;
  }
  
@@ -84,8 +109,11 @@ index 67c9be0..49316a1 100644
 +  try {
 +    if (directoriesOnly) {
 +      nxBootTrace("path cache: direct directory scan");
-+      for (char **path = paths; *path; ++path)
-+        nxCacheDirectory(p, *path, "");
++      for (char **path = paths; *path; ++path) {
++        const std::string root = filesystemImpl::normalizePath(*path, false, true);
++        nxBootTrace(root.c_str());
++        nxCacheDirectory(p, root, "");
++      }
 +    }
 +  } catch (...) {
 +    PHYSFS_freeList(paths);
