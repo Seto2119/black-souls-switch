@@ -63,7 +63,7 @@ index b6344f9..3fd007b 100644
      std::string &customScript = conf.customScript;
      if (!customScript.empty())
 diff --git a/src/main.cpp b/src/main.cpp
-index 92f49d1..510e078 100644
+index 92f49d1..c475dfb 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
 @@ -125,7 +125,15 @@ static void printGLInfo() {
@@ -92,17 +92,31 @@ index 92f49d1..510e078 100644
    } catch (const Exception &exc) {
      rgssThreadError(threadData, exc.msg);
      alcDestroyContext(alcCtx);
-@@ -170,7 +180,9 @@ int rgssThreadFun(void *userdata) {
+@@ -170,7 +180,23 @@ int rgssThreadFun(void *userdata) {
    }
  
    /* Start script execution */
++#ifdef __SWITCH__
++  {
++    const char *probePaths[] = {
++      "Audio/BGM/タイトル.ogg",
++      "sdmc:/switch/black-souls/gamedata/Audio/BGM/タイトル.ogg",
++      "sdmc:/switch/black-souls/Audio/BGM/タイトル.ogg"
++    };
++    for (const char *probe : probePaths) {
++      FILE *file = fopen(probe, "rb");
++      Debug() << "Native UTF-8 probe" << probe << "opened:" << (file != nullptr);
++      if (file) fclose(file);
++    }
++  }
++#endif
 +  NX_TRACE("before script execute");
    scriptBinding->execute();
 +  NX_TRACE("after script execute");
  
    threadData->rqTermAck.set();
    threadData->ethread->requestTerminate();
-@@ -193,6 +205,7 @@ static void printRgssVersion(int ver) {
+@@ -193,6 +219,7 @@ static void printRgssVersion(int ver) {
  }
  
  static void rgssThreadError(RGSSThreadData *rtData, const std::string &msg) {
@@ -110,7 +124,7 @@ index 92f49d1..510e078 100644
    rtData->rgssErrorMsg = msg;
    rtData->ethread->requestTerminate();
    rtData->rqTermAck.set();
-@@ -230,6 +243,10 @@ static void setupWindowIcon(const Config &conf, SDL_Window *win) {
+@@ -230,6 +257,10 @@ static void setupWindowIcon(const Config &conf, SDL_Window *win) {
    }
  }
  
@@ -121,7 +135,7 @@ index 92f49d1..510e078 100644
  static SDL_Window *initVideo(const Config &conf) {
    Uint32 winFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_INPUT_FOCUS | SDL_WINDOW_ALLOW_HIGHDPI;
  
-@@ -244,6 +261,9 @@ static SDL_Window *initVideo(const Config &conf) {
+@@ -244,6 +275,9 @@ static SDL_Window *initVideo(const Config &conf) {
    winFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_INPUT_FOCUS;
  #endif
  
@@ -131,7 +145,7 @@ index 92f49d1..510e078 100644
    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
      return nullptr;
    }
-@@ -259,7 +279,11 @@ static SDL_Window *initVideo(const Config &conf) {
+@@ -259,7 +293,11 @@ static SDL_Window *initVideo(const Config &conf) {
    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GetHintBoolean(SDL_HINT_OPENGL_ES_DRIVER, SDL_FALSE) ? SDL_GL_CONTEXT_PROFILE_ES : SDL_GL_CONTEXT_PROFILE_CORE | SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
  #endif
  
@@ -143,18 +157,18 @@ index 92f49d1..510e078 100644
    if (window == nullptr) {
      SDL_QuitSubSystem(SDL_INIT_VIDEO);
    }
-@@ -303,7 +327,9 @@ static void nxSetupWorkdir(int argc, char *argv[]) {
+@@ -303,7 +341,9 @@ static void nxSetupWorkdir(int argc, char *argv[]) {
  
  int main(int argc, char *argv[]) {
  #ifdef __SWITCH__
 -    nxBootTrace("main() reached");
-+    nxBootTrace("main() reached; build ruby-diagnostics-1");
++    nxBootTrace("main() reached; build ascii-asset-repair-1");
 +    freopen("sdmc:/mkxp-z-stdout.log", "a", stdout);
 +    freopen("sdmc:/mkxp-z-stderr.log", "a", stderr);
      {
          char msg[512];
          snprintf(msg, sizeof(msg), "argc=%d argv[0]=%s", argc,
-@@ -349,8 +375,31 @@ int main(int argc, char *argv[]) {
+@@ -349,8 +389,31 @@ int main(int argc, char *argv[]) {
  #endif
  
      /* now we load the config */
@@ -186,7 +200,7 @@ index 92f49d1..510e078 100644
      if (conf.windowTitle.empty())
        conf.windowTitle = conf.game.title;
  
-@@ -368,12 +417,18 @@ int main(int argc, char *argv[]) {
+@@ -368,12 +431,18 @@ int main(int argc, char *argv[]) {
      }
  #endif
  
@@ -205,7 +219,7 @@ index 92f49d1..510e078 100644
      SDL_Window *win = nullptr;
  
  #ifdef MKXPZ_CHECK_FOR_WAYLAND_SUPPORT
-@@ -624,6 +679,7 @@ int main(int argc, char *argv[]) {
+@@ -624,6 +693,7 @@ int main(int argc, char *argv[]) {
        return 0;
      }
  
@@ -213,7 +227,7 @@ index 92f49d1..510e078 100644
      if (!EventThread::allocUserEvents()) {
        showInitError("Error allocating SDL user events");
        return 0;
-@@ -641,6 +697,7 @@ int main(int argc, char *argv[]) {
+@@ -641,6 +711,7 @@ int main(int argc, char *argv[]) {
      assert(conf.rgssVersion >= 1 && conf.rgssVersion <= 3);
      printRgssVersion(conf.rgssVersion);
  
@@ -221,7 +235,7 @@ index 92f49d1..510e078 100644
      int imgFlags = IMG_INIT_PNG | IMG_INIT_JPG;
      if (IMG_Init(imgFlags) != imgFlags) {
        showInitError(std::string("Error initializing SDL_image: ") +
-@@ -654,6 +711,7 @@ int main(int argc, char *argv[]) {
+@@ -654,6 +725,7 @@ int main(int argc, char *argv[]) {
        return 0;
      }
  
@@ -229,7 +243,7 @@ index 92f49d1..510e078 100644
      if (TTF_Init() < 0) {
        showInitError(std::string("Error initializing SDL_ttf: ") +
                      SDL_GetError());
-@@ -667,6 +725,7 @@ int main(int argc, char *argv[]) {
+@@ -667,6 +739,7 @@ int main(int argc, char *argv[]) {
        return 0;
      }
  
@@ -237,7 +251,7 @@ index 92f49d1..510e078 100644
      if (Sound_Init() == 0) {
        showInitError(std::string("Error initializing SDL_sound: ") +
                      Sound_GetError());
-@@ -731,7 +790,9 @@ int main(int argc, char *argv[]) {
+@@ -731,7 +804,9 @@ int main(int argc, char *argv[]) {
      (void)setupWindowIcon;
  #endif
  
@@ -247,7 +261,7 @@ index 92f49d1..510e078 100644
  
      if (!alcDev) {
        showInitError("Could not detect an available audio device.");
-@@ -747,7 +808,9 @@ int main(int argc, char *argv[]) {
+@@ -747,7 +822,9 @@ int main(int argc, char *argv[]) {
      }
  
      SDL_DisplayMode mode;
@@ -257,7 +271,7 @@ index 92f49d1..510e078 100644
  
      /* Can't sync to display refresh rate if its value is unknown */
      if (!mode.refresh_rate)
-@@ -756,7 +819,9 @@ int main(int argc, char *argv[]) {
+@@ -756,7 +833,9 @@ int main(int argc, char *argv[]) {
      EventThread eventThread;
  
  #ifndef MKXPZ_INIT_GL_LATER
@@ -267,7 +281,7 @@ index 92f49d1..510e078 100644
  #else
      SDL_GLContext glCtx = NULL;
  #endif
-@@ -772,7 +837,9 @@ int main(int argc, char *argv[]) {
+@@ -772,7 +851,9 @@ int main(int argc, char *argv[]) {
      rtData.drawableSizeMsg.post(Vec2i(drwW, drwH));
  
      /* Load and post key bindings */
@@ -277,7 +291,7 @@ index 92f49d1..510e078 100644
      
  #ifdef __APPLE__
      // Create Touch Bar
-@@ -780,10 +847,13 @@ int main(int argc, char *argv[]) {
+@@ -780,10 +861,13 @@ int main(int argc, char *argv[]) {
  #endif
  
      /* Start RGSS thread */
@@ -291,7 +305,7 @@ index 92f49d1..510e078 100644
  
      /* Request RGSS thread to stop */
      rtData.rqTerm.set();
-@@ -812,8 +882,12 @@ int main(int argc, char *argv[]) {
+@@ -812,8 +896,12 @@ int main(int argc, char *argv[]) {
  
      if (!rtData.rgssErrorMsg.empty()) {
        Debug() << rtData.rgssErrorMsg;
